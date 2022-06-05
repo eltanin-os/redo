@@ -1,0 +1,80 @@
+.Dd $Mdocdate: June 04 2022 $
+.Dt REDO-WHICHDO 1
+.Os
+.Sh NAME
+.Nm redo-whichdo
+.Nd write the .do file search path
+.Sh SYNOPSIS
+.Nm
+.Ar target
+.Sh DESCRIPTION
+The
+.Nm
+utility writes the path searched for the
+.Ar target
+.Sq .do
+file, printing one occurence per-line, and stopping at the
+first existent occurence.
+.Pp
+The
+.Sq .do
+file is searched in the target directory. If the target directory does not
+contain the desired
+.Sq .do
+file, it will move to its parent directory and try again, until it reaches
+the main directory
+.Po
+where
+.Xr redo 1
+was executed or, if it was not executed, the current directory
+.Pc
+or the root directory.
+.Pp
+The
+.Sq .do
+file is searched in the following form
+.Dq Ar target Ns .do .
+If the
+.Ar target
+.Sq .do
+file does not exist, it will use the form
+.Dq default. Ns Em extension Ns .do ,
+where
+.Em extension
+is the
+.Ar target
+name extension
+.Pq e.g file Ns Em .c.o ,
+if the file still does not exist, one extension will be left trimmed
+.Po
+e.g
+.Dq default.c.o.do
+becomes
+.Dq default.o.do
+.Pc ,
+and this pattern repeats until it reaches the form
+.Dq default.do .
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+.Bd -literal
+$ pwd
+/tmp/program
+$ redo-whichdo a/b/c.x.y.o
+/tmp/program/a/b/c.x.y.o.do
+/tmp/program/a/b/default.x.y.o.do
+/tmp/program/a/b/default.y.o.do
+/tmp/program/a/b/default.o.do
+/tmp/program/a/b/default.do
+/tmp/program/a/default.x.y.o.do
+/tmp/program/a/default.y.o.do
+/tmp/program/a/default.o.do
+/tmp/program/a/default.do
+/tmp/program/default.x.y.o.do
+/tmp/program/default.y.o.do
+/tmp/program/default.o.do
+/tmp/program/default.do
+.Ed
+.Sh SEE ALSO
+.Xr redo 1 ,
+.Xr redo-ifchange 1

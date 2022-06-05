@@ -1,0 +1,37 @@
+.Dd $Mdocdate: June 03 2022 $
+.Dt REDO-IFCREATE 1
+.Os
+.Sh NAME
+.Nm redo-ifcreate
+.Nd rebuild target when its dependecies are created
+.Sh SYNOPSIS
+.Nm
+.Op Ar
+.Sh DESCRIPTION
+The
+.Nm
+utility declares the non-existent
+.Ar file
+as a dependency to the current target, and rebuild if any dependency is
+created.
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+.Bd -literal
+# default.o.do
+# makes possible to use generic or specific cflags
+if [ -e $2.cflags ]; then
+	redo-ifchange $2.cflags
+	CFLAGS=$(cat $2.cflags)
+else
+	redo-ifcreate $2.cflags
+	redo-ifchange default.cflags
+	CFLAGS=$(cat default.cflags)
+fi
+redo-ifchange $2.c
+cc $CFLAGS -o $3 $2.c
+.Ed
+.Sh SEE ALSO
+.Xr redo 1
+.Xr redo-always 1 ,
+.Xr redo-ifchange 1

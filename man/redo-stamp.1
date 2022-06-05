@@ -1,0 +1,24 @@
+.Dd $Mdocdate: June 04 2022 $
+.Dt REDO-STAMP 1
+.Os
+.Sh NAME
+.Nm redo-stamp
+.Nd declares a stamp dependency
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+The
+.Nm
+utility declares the content received from the standard input
+as a dependency, and compares with its last input to define the current
+target as updated, in case of same input, or out-of-date, in case of a
+different input.
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr redo 1 ,
+.Xr redo-ifchange 1 ,
+.Xr redo-ifcreate 1
+.Sh BUGS
+In this implementation, this program does nothing, it only exists for
+compatibility reasons. This is intentional and not intended to change.

@@ -1,0 +1,3 @@
+#!/bin/rc -e
+. $PWD/config.rc
+$CC $CFLAGS $CPPFLAGS $LDFLAGS -o src/redo src/redo.c -ltertium

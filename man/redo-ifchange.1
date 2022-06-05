@@ -1,0 +1,28 @@
+.Dd $Mdocdate: June 03 2022 $
+.Dt REDO-IFCHANGE 1
+.os
+.Sh NAME
+.Nm redo-ifchange
+.Nd rebuild target when its dependencies are out-of-date
+.Sh SYNOPSIS
+.Nm
+.Op Ar
+.Sh DESCRIPTION
+The
+.Nm
+utility declares
+.Ar file
+as a dependency to the current target, and rebuild any dependency marked as
+out-of-date.
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+.Bd -literal
+# main.do
+redo-ifchange main.c
+cc -o $3 $2.c
+.Ed
+.Sh SEE ALSO
+.Xr redo 1 ,
+.Xr redo-always 1 ,
+.Xr redo-ifcreate 1

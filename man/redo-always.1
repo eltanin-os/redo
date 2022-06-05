@@ -1,0 +1,25 @@
+.Dd $Mdocdate: June 03 2022 $
+.Dt REDO-ALWAYS 1
+.Os
+.Sh NAME
+.Nm redo-always
+.Nd mark target as always out-of-date
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+The
+.Nm
+utility marks the current target as out-of-date.
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+.Bd -literal
+# random.do
+# creates a file which always has a different content
+redo-always
+mktemp -u XXXXXXXXX
+.Ed
+.Sh SEE ALSO
+.Xr redo 1
+.Xr redo-ifchange 1 ,
+.Xr redo-ifcreate 1
