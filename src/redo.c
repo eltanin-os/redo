@@ -15,6 +15,8 @@
 
 #define HDEC(x) ((x <= '9') ? x - '0' : (((uchar)x | 32) - 'a') + 10)
 
+static ctype_node *tmpfiles;
+
 static ctype_fd redo_rootfd;
 static ctype_fd redo_depfd;
 static ctype_fd redo_dotfd;
@@ -25,6 +27,25 @@ static char *pwd;
 
 static int fflag;
 static int xflag;
+
+/* ctors/dtors routines */
+static void
+cleantrash(void)
+{
+	ctype_node *p;
+	while ((p = c_adt_lpop(&tmpfiles))) {
+		c_nix_unlink(p->p);
+		c_adt_lfree(p);
+	}
+}
+
+static void
+trackfile(char *s, usize n)
+{
+	ctype_node *p;
+	p = c_adt_lnew(s, n);
+	if (c_adt_lpush(&tmpfiles, p) < 0) c_err_diex(1, "no memory");
+}
 
 /* fmt routines */
 static ctype_status
@@ -132,6 +153,7 @@ mktemp(char *s, usize n, uint opts)
 	ctype_fd fd;
 	if ((fd = c_nix_mktemp(s, n, opts)) < 0)
 		c_err_die(1, "failed to obtain temporary file");
+	trackfile(s, n);
 	return fd;
 }
 
@@ -541,18 +563,15 @@ rundo(char *dofile, char *target)
 	return r;
 }
 
-/* XXX: deal with trash in case of earlier failure */
 static ctype_status
 ifchange(char *target)
 {
 	ctype_fd depfd;
-	ctype_status r;
 	int depth;
 	char deptmp[] = TMPSTR;
 	char *dep;
 	char **s;
 
-	r = 0;
 	depfd = -1;
 	if (depcheck(target)) goto next;
 	dep = pathdep(target);
@@ -691,11 +710,13 @@ redo_ifcreate(int argc, char **argv)
 	return 0;
 }
 
+/* XXX: deal with signals */
 static ctype_status
 redo_ifchange(int argc, char **argv)
 {
 	ctype_status r;
-	(void)argc;
+	if (!argc) return 0;
+	c_std_atexit(cleantrash);
 	r = 0;
 	for (; *argv; ++argv) {
 		if (isrel(*argv)) *argv = toabs(*argv);
