@@ -8,13 +8,15 @@ switch ($1) {
 case all
 	redo-ifchange src/redo
 case clean
-	rm -f src/redo src/*.o
+	rm -f `{redo-targets}
 case install
+	redo-ifalways
 	redo-ifchange all install-man
 	install -dm 755 $"DESTDIR/$"BINDIR
 	install -cm 755 src/redo $"DESTDIR/$"BINDIR
 	for (prog in $SUBPROGS) ln -s redo $"DESTDIR/$"BINDIR/$prog
 case install-man
+	redo-ifalways
 	redo-ifchange $MANPAGES
 	install -dm 755 $"DESTDIR/$"MANDIR/man1
 	install -cm 644 $MANPAGES $"DESTDIR/$"MANDIR/man1
