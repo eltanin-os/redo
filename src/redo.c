@@ -151,8 +151,8 @@ static ctype_fd
 mktemp(char *s, usize n, uint opts)
 {
 	ctype_fd fd;
-	if ((fd = c_nix_mktemp(s, n, opts)) < 0)
-		c_err_die(1, "failed to obtain temporary file");
+	fd = c_nix_mktemp5(s, n, opts, C_NIX_OAPPEND, 0644);
+	if (fd < 0) c_err_die(1, "failed to obtain temporary file");
 	trackfile(s, n);
 	return fd;
 }
@@ -322,7 +322,7 @@ hexcmp(char *p, usize n, char *s)
 }
 
 static char *
-progname(char *dofile)
+progname(char *dofile, int *toexec)
 {
 	static ctype_arr arr; /* "memory leak" */
 	ctype_stat st;
@@ -337,19 +337,31 @@ progname(char *dofile)
 	/* get first line */
 	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
 	c_arr_trunc(&arr, 0, sizeof(uchar));
-	getln(&ioq, &arr);
+	if (!getln(&ioq, &arr)) goto shfallback;
 	c_nix_fdclose(fd);
 	/* check for shellbang */
 	c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar)); /* linefeed */
 	s = c_arr_data(&arr);
 	if (!(s[0] == '#' && s[1] == '!')) goto shfallback;
 	if (isexec) return dofile;
-	dynfmt(&arr, " %s", dofile);
+	*toexec = 1;
 	return (char *)c_arr_data(&arr) + 2;
 shfallback:
 	c_arr_trunc(&arr, 0, sizeof(uchar));
-	dynfmt(&arr, "/bin/sh -e%s %s", xflag ? "x" : "", dofile);
+	dynfmt(&arr, "/bin/sh -e%s", xflag ? "x" : "");
+	*toexec = 1;
 	return c_arr_data(&arr);
+}
+
+static char **
+getargs(char *dofile, char *target, char *out)
+{
+	int toexec;
+	char *base, *prog;
+	prog = progname(dofile, (toexec = 0, &toexec));
+	base = basefilename(dofile, target);
+	if (toexec) return arglist(prog, dofile, target, base, out);
+	return arglist(prog, target, base, out);
 }
 
 static void
@@ -541,8 +553,7 @@ rundo(char *dofile, char *target)
 	setenv(REDO_TARGET, target);
 	setnum(REDO_DEPTH, redo_depth+1);
 	/* exec */
-	dofile = progname(dofile);
-	args = arglist(dofile, target, basefilename(dofile, target), out);
+	args = getargs(dofile, target, out);
 	execout(fd, args);
 	c_std_free(args);
 	/* target */
@@ -576,8 +587,6 @@ ifchange(char *target)
 	if (depcheck(target)) goto next;
 	dep = pathdep(target);
 
-	c_nix_chdir(dirname(target));
-
 	depfd = mktemp(deptmp, TMPSIZ, 0);
 	setnum(REDO_DEPFD, depfd);
 
@@ -603,7 +612,6 @@ ifchange(char *target)
 next:
 	c_nix_fdclose(depfd);
 	c_nix_unlink(deptmp);
-	c_nix_fdchdir(redo_dotfd);
 	if (depfd != -1) c_nix_fdclose(depfd);
 	return 0;
 }
@@ -703,11 +711,16 @@ whichdo_usage(void)
 static ctype_status
 redo_ifcreate(int argc, char **argv)
 {
+	ctype_status r;
 	(void)argc;
 	if (c_std_noopt(argmain, *argv)) default1_usage();
 	argv += argmain->idx;
-	for (; *argv; ++argv) ifcreate(redo_depfd, *argv);
-	return 0;
+	r = 0;
+	for (; *argv; ++argv) {
+		if (exist(*argv)) r = 1;
+		ifcreate(redo_depfd, *argv);
+	}
+	return r;
 }
 
 /* XXX: deal with signals */
@@ -720,7 +733,10 @@ redo_ifchange(int argc, char **argv)
 	r = 0;
 	for (; *argv; ++argv) {
 		if (isrel(*argv)) *argv = toabs(*argv);
+		c_exc_setenv("PWD", dirname(*argv));
+		c_nix_chdir(dirname(*argv));
 		r |= ifchange(*argv);
+		c_nix_fdchdir(redo_dotfd);
 		if (!fflag) depwrite(redo_depfd, *argv);
 		c_std_free(*argv);
 	}
@@ -757,7 +773,7 @@ redo(int argc, char **argv)
 		case 'j': /* XXX */
 			break;
 		case 'x':
-			setnum(REDO_XFLAG, 1);
+			setnum(REDO_XFLAG, (xflag = 1));
 			break;
 		default:
 			redo_usage();
@@ -797,11 +813,11 @@ main(int argc, char **argv)
 	/* catch flags */
 	if ((xflag = getnum(REDO_XFLAG)) < 0) xflag = 0;
 
-	s = getdbpath();
-	mkpath(s, 0777, 0777);
 	/* main routines */
+	s = getdbpath();
 	prog = c_gen_basename(prog);
 	if (!C_STR_SCMP("redo", prog)) {
+		mkpath(s, 0777, 0777);
 		return redo(argc, argv);
 	} else if (!C_STR_SCMP("redo-always", prog)) {
 		checkparent();

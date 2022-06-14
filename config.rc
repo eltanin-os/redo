@@ -3,5 +3,5 @@ MANDIR=$PREFIX/share/man
 BINDIR=$PREFIX/bin
 CC=cc
 CFLAGS=(-O0 -g -std'='c99 -Wall -Wextra -pedantic)
-CPPFLAGS=''
-LDFLAGS=''
+#CPPFLAGS=''
+#LDFLAGS=''
