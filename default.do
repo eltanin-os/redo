@@ -3,7 +3,7 @@ if (~ $1 *.[1ch]) exit
 MAINDIR=$PWD
 if (test -e config.rc) {
 	redo-ifchange config.rc
-	. $MAINDIR/config.rc
+	. $MAINDIR/config.rc ||;
 }; if not {
 	redo-ifcreate config.rc
 }
