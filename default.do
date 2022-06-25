@@ -1,7 +1,12 @@
 #!/bin/rc -e
-{ if (~ $1 *.[1ch]) exit } || true; # '-e' sucks
+if (~ $1 *.[1ch]) exit
 MAINDIR=$PWD
-. $MAINDIR/config.rc
+if (test -e config.rc) {
+	redo-ifchange config.rc
+	. $MAINDIR/config.rc
+}; if not {
+	redo-ifcreate config.rc
+}
 SUBPROGS='redo-'^(always ifchange ifcreate ood sources stamp targets whichdo)
 MANPAGES=man/*
 switch ($1) {
