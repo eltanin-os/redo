@@ -1,31 +1,21 @@
-#!/bin/rc -e
-if (~ $1 *.[1ch]) exit
-MAINDIR=$PWD
-if (test -e config.rc) {
-	redo-ifchange config.rc
-	. $MAINDIR/config.rc ||;
-}; if not {
-	redo-ifcreate config.rc
+#!/bin/execlineb -S3
+multisubstitute {
+	importas -D "/usr/local" DESTDIR DESTDIR
+	importas -D "/bin" BINDIR BINDIR
+	define -s SUBPROGS "always ifchange ifcreate ood sources stamp targets whichdo"
 }
-SUBPROGS='redo-'^(always ifchange ifcreate ood sources stamp targets whichdo)
-MANPAGES=man/*
-switch ($1) {
-case all
+ifelse { test "${1}" = "all" } {
 	redo-ifchange src/redo
-case clean
-	rm -f `{redo-targets}
-case install
-	redo-always
-	redo-ifchange all install-man
-	install -dm 755 $"DESTDIR/$"BINDIR
-	install -cm 755 src/redo $"DESTDIR/$"BINDIR
-	for (prog in $SUBPROGS) ln -s redo $"DESTDIR/$"BINDIR/$prog
-case install-man
-	redo-always
-	redo-ifchange $MANPAGES
-	install -dm 755 $"DESTDIR/$"MANDIR/man1
-	install -cm 644 $MANPAGES $"DESTDIR/$"MANDIR/man1
-case *
-	echo no rule for ''''$1'''' >[1=2]
-	exit 1
 }
+ifelse { test "${1}" = "clean" } {
+	backtick targets { redo-targets }
+	importas -isu targets targets
+	rm -f $targets
+}
+ifelse { test "${1}" = "install" } {
+	foreground { redo-ifchange all }
+	foreground { install -dm 755 "${DESTDIR}/${BINDIR}" }
+	foreground { install -cm 755 src/redo "${DESTDIR}/${BINDIR}" }
+	forx -E prog { redo-$SUBPROGS } ln -s redo "${DESTDIR}/${BINDIR}/${prog}"
+}
+exit 0
