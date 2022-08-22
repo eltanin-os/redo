@@ -239,7 +239,7 @@ static ctype_status
 exist(char *s)
 {
 	ctype_stat st;
-	if (c_nix_stat(&st, s) < 0) return 0;
+	if (c_nix_lstat(&st, s) < 0) return 0;
 	return 1;
 }
 
@@ -600,7 +600,8 @@ ifchange(char *target)
 			c_nix_unlink(dep);
 			goto next;
 		} else {
-			c_err_diex(1, "%s: no .do file.\n", target);
+			c_err_diex(1, "%s: no .do file.\n",
+			    target+redo_rootdir_len+1);
 		}
 	}
 	depth = redo_depth << 1;
