@@ -4,18 +4,27 @@ multisubstitute {
 	importas -D "/bin" BINDIR BINDIR
 	define -s SUBPROGS "always ifchange ifcreate ood sources stamp targets whichdo"
 }
-ifelse { test "${1}" = "all" } {
+case -- $1 {
+".*\.[1ch]" {
+	exit 0
+}
+"all" {
 	redo-ifchange src/redo
 }
-ifelse { test "${1}" = "clean" } {
+"clean" {
 	backtick targets { redo-targets }
 	importas -isu targets targets
 	rm -f $targets
 }
-ifelse { test "${1}" = "install" } {
+"install" {
 	foreground { redo-ifchange all }
 	foreground { install -dm 755 "${DESTDIR}/${BINDIR}" }
 	foreground { install -cm 755 src/redo "${DESTDIR}/${BINDIR}" }
 	forx -E prog { redo-$SUBPROGS } ln -s redo "${DESTDIR}/${BINDIR}/${prog}"
 }
-exit 0
+}
+foreground {
+	fdmove 1 2
+	echo no rule for $1
+}
+exit 1
