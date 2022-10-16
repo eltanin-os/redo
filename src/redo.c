@@ -3,8 +3,7 @@
 
 #define arglist(...) arglist_(__VA_ARGS__, nil)
 
-#define TMPSTR ".tmpfile.XXXXXXXXX"
-#define TMPSIZ sizeof(TMPSTR)
+#define TMPFILE ".tmpfile.XXXXXXXXX"
 
 #define REDO_XFLAG "_TERTIUM_REDO_XFLAG"
 #define REDO_ROOTDIR "_TERTIUM_REDO_ROOTDIR"
@@ -19,7 +18,6 @@ static ctype_node *tmpfiles;
 
 static ctype_fd redo_rootfd;
 static ctype_fd redo_depfd;
-static ctype_fd redo_dotfd;
 static usize redo_rootdir_len;
 static int redo_depth;
 static char *redo_rootdir;
@@ -29,14 +27,54 @@ static int fflag;
 static int xflag;
 
 /* ctors/dtors routines */
+static ctype_status
+recdel(char **args)
+{
+	ctype_dent *ep;
+	ctype_dir dir;
+	if (c_dir_open(&dir, args, 0, nil) < 0) return -1;
+	while ((ep = c_dir_read(&dir))) {
+		switch (ep->info) {
+		case C_DIR_FSDP:
+			c_nix_rmdir(ep->path);
+			break;
+		case C_DIR_FSNS:
+		case C_DIR_FSERR:
+			break;
+		default:
+			c_nix_unlink(ep->path);
+		}
+	}
+	c_dir_close(&dir);
+	return 0;
+}
+
 static void
 cleantrash(void)
 {
 	ctype_node *p;
-	while ((p = c_adt_lpop(&tmpfiles))) {
-		c_nix_unlink(p->p);
-		c_adt_lfree(p);
-	}
+	usize len;
+	char **args;
+	char *argv[2];
+
+	len = 0;
+	p = tmpfiles->next;
+	do { ++len; } while ((p = p->next)->prev);
+
+	if (!(args = c_std_alloc(len+1, sizeof(char *)))) goto nomem;
+	len = 0;
+	p = tmpfiles->next;
+	do { args[len++] = p->p; } while ((p = p->next)->prev);
+	args[len] = 0;
+	if (recdel(args) < 0) goto nomem;
+	goto free;
+nomem:
+	/* non-recursive fallback */
+	p = tmpfiles->next;
+	do { c_nix_unlink(p->p); } while ((p = p->next)->prev);
+free:
+	c_std_free(args);
+	while ((p = c_adt_lpop(&tmpfiles))) c_adt_lfree(p);
 }
 
 static void
@@ -44,7 +82,7 @@ trackfile(char *s, usize n)
 {
 	ctype_node *p;
 	p = c_adt_lnew(s, n);
-	if (c_adt_lpush(&tmpfiles, p) < 0) c_err_diex(1, "no memory");
+	if (c_adt_lpush(&tmpfiles, p) < 0) c_err_diex(1, nil);
 }
 
 /* fmt routines */
@@ -77,7 +115,7 @@ arglist_(char *prog, ...)
 	char **av;
 	va_list ap;
 	va_start(ap, prog);
-	if (!(av = c_exc_varglist(prog, ap))) c_err_diex(1, "no memory");
+	if (!(av = c_exc_varglist(prog, ap))) c_err_diex(1, nil);
 	va_end(ap);
 	return av;
 }
@@ -113,14 +151,14 @@ fdstat(ctype_stat *p, ctype_fd fd)
 static void
 setenv(char *k, char *v)
 {
-	if (c_exc_setenv(k, v) < 0) c_err_die(1, "no memory");
+	if (c_exc_setenv(k, v) < 0) c_err_die(1, nil);
 }
 
 static void *
 dynalloc(ctype_arr *p, usize m, usize n)
 {
 	void *v;
-	if (!(v = c_dyn_alloc(p, m, n))) c_err_die(1, "no memory");
+	if (!(v = c_dyn_alloc(p, m, n))) c_err_diex(1, nil);
 	return v;
 }
 
@@ -129,7 +167,7 @@ dynfmt(ctype_arr *p, char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
-	if (c_dyn_vfmt(p, fmt, ap) < 0) c_err_diex(1, "no memory");
+	if (c_dyn_vfmt(p, fmt, ap) < 0) c_err_diex(1, nil);
 	va_end(ap);
 }
 
@@ -137,14 +175,15 @@ static size
 getln(ctype_ioq *p, ctype_arr *ap)
 {
 	size r;
-	if ((r = c_ioq_getln(p, ap)) < 0) c_err_diex(1, "no memory");
+	if ((r = c_ioq_getln(p, ap)) < 0) c_err_diex(1, nil);
 	return r;
 }
 
 static void
 mkpath(char *s, uint mode, uint dmode)
 {
-	if (c_nix_mkpath(s, mode, dmode) < 0) c_err_die(1, "mkpath %s", s);
+	if (c_nix_mkpath(s, mode, dmode) < 0)
+		c_err_die(1, "failed to generate path %s", s);
 }
 
 static ctype_fd
@@ -163,7 +202,7 @@ strfmt(char *fmt, ...)
 	va_list ap;
 	char *tmp;
 	va_start(ap, fmt);
-	if (c_str_vfmt(&tmp, fmt, ap) < 0) c_err_diex(1, "no memory");
+	if (c_str_vfmt(&tmp, fmt, ap) < 0) c_err_diex(1, nil);
 	va_end(ap);
 	return tmp;
 }
@@ -247,20 +286,9 @@ static char *
 getpwd(void)
 {
 	static char buf[C_LIM_PATHMAX];
-	ctype_stat pwd, dot;
-	usize n;
 	char *s;
-
-	if (!(s = c_std_getenv("PWD")) ||
-	    (*s != '/') ||
-	    (n = c_str_len(s, C_LIM_PATHMAX)) == C_LIM_PATHMAX ||
-	    (c_mem_mem(s, n, "/./", sizeof("/./") - 1) ||
-	    c_mem_mem(s, n, "/../", sizeof("/../") - 1)) ||
-	    (c_nix_stat(&pwd, s) < 0 || c_nix_fdstat(&dot, redo_dotfd) < 0) ||
-	    (pwd.dev != dot.dev || pwd.ino != dot.ino)) {
-		s = c_nix_getcwd(buf, sizeof(buf));
-		if (!s) c_err_die(1, "failed to obtain current dir");
-	}
+	s = c_nix_getcwd(buf, sizeof(buf));
+	if (!s) c_err_die(1, "failed to obtain current dir");
 	return s;
 }
 
@@ -274,16 +302,26 @@ getdbpath(void)
 	return c_arr_data(&arr);
 }
 
-static int
-isrel(char *s)
-{
-	return s[0] != '/';
-}
-
+/* XXX: slow? */
 static char *
 toabs(char *s)
 {
-	return strfmt("%s/%s", pwd, s);
+	ctype_arr arr;
+	char buf[C_LIM_PATHMAX];
+	char *tmp;
+	/* enter target path */
+	c_arr_init(&arr, buf, sizeof(buf));
+	if (s[0] == '/') {
+		tmp = dirname(s);
+	} else {
+		arrfmt(&arr, "%s/%s", pwd, s);
+		tmp = c_gen_dirname(c_arr_data(&arr));
+	}
+	if (c_nix_chdir(tmp) < 0) c_err_die(1, "failed to enter \"%s\"", tmp);
+	/* getcwd */
+	tmp = c_nix_getcwd(buf, sizeof(buf));
+	if (!tmp) c_err_die(1, "failed to obtain current dir");
+	return strfmt("%s/%s", tmp, c_gen_basename(s));
 }
 
 /* utils routines */
@@ -503,7 +541,7 @@ always(ctype_fd fd)
 static char **
 whichdo(char *target)
 {
-	static ctype_arr arr; /* "memory leak" */
+	static ctype_arr arr;
 	usize len;
 	char *ext, *s, *tmp;
 	void **ptr;
@@ -537,18 +575,20 @@ ifcreate(ctype_fd fd, char *s)
 }
 
 static int
-rundo(char *dofile, char *target)
+rundo(char *dofile, char *dir, char *target)
 {
+	ctype_arr arr;
 	ctype_stat st;
 	ctype_fd fd;
 	ctype_status r;
-	char fdo[] = TMPSTR;
-	char out[] = TMPSTR;
+	char fdo[] = TMPFILE;
+	char out[C_LIM_PATHMAX];
 	char **args;
 	/* redirection */
-	fd = mktemp(out, TMPSIZ, C_NIX_OTMPANON); /* $3 */
-	c_nix_fdclose(fd);
-	fd = mktemp(fdo, TMPSIZ, 0); /* stdout */
+	c_arr_init(&arr, out, sizeof(out));
+	arrfmt(&arr, "%s/%s", dir, TMPFILE);
+	c_nix_fdclose(mktemp(out, c_arr_bytes(&arr), C_NIX_OTMPANON)); /* $3 */
+	fd = mktemp(fdo, sizeof(fdo), 0); /* stdout */
 	/* env */
 	setenv(REDO_TARGET, target);
 	setnum(REDO_DEPTH, redo_depth+1);
@@ -578,22 +618,24 @@ static ctype_status
 ifchange(char *target)
 {
 	ctype_fd depfd;
+	ctype_status r;
 	int depth;
-	char deptmp[] = TMPSTR;
-	char *dep;
+	char deptmp[] = TMPFILE;
+	char *dep, *dir, *file;
 	char **s;
 
 	depfd = -1;
 	if (depcheck(target)) goto next;
 	dep = pathdep(target);
 
-	depfd = mktemp(deptmp, TMPSIZ, 0);
+	depfd = mktemp(deptmp, sizeof(deptmp), 0);
 	setnum(REDO_DEPFD, depfd);
 
 	s = whichdo(target);
 	for (; *s; ++s) {
 		if (exist(*s)) break;
 		ifcreate(depfd, *s); /* parent */
+		c_std_free(*s);
 	}
 	if (!*s) {
 		if (exist(target)) {
@@ -607,9 +649,13 @@ ifchange(char *target)
 	depth = redo_depth << 1;
 	c_err_warnx("%*.*s %s", depth, depth, " ", target+redo_rootdir_len+1);
 
-	if (rundo(*s, c_gen_basename(target))) fdfmt(depfd, "+%s\n", target);
+	dir = dirname(target);
+	file = c_gen_basename(target);
+	if (rundo(*s, dir, file)) fdfmt(depfd, "+%s\n", target);
 	depwrite(depfd, *s);
 	c_nix_rename(dep, deptmp);
+	for (; *s; ++s) c_std_free(*s);
+	c_std_free(s);
 next:
 	c_nix_fdclose(depfd);
 	c_nix_unlink(deptmp);
@@ -718,8 +764,10 @@ redo_ifcreate(int argc, char **argv)
 	argv += argmain->idx;
 	r = 0;
 	for (; *argv; ++argv) {
+		*argv = toabs(*argv);
 		if (exist(*argv)) r = 1;
 		ifcreate(redo_depfd, *argv);
+		c_std_free(*argv);
 	}
 	return r;
 }
@@ -729,15 +777,15 @@ static ctype_status
 redo_ifchange(int argc, char **argv)
 {
 	ctype_status r;
+	char *dir;
 	if (!argc) return 0;
 	c_std_atexit(cleantrash);
 	r = 0;
 	for (; *argv; ++argv) {
-		if (isrel(*argv)) *argv = toabs(*argv);
-		c_exc_setenv("PWD", dirname(*argv));
-		c_nix_chdir(dirname(*argv));
+		dir = dirname(*argv = toabs(*argv));
+		c_exc_setenv("PWD", dir);
+		c_nix_chdir(dir);
 		r |= ifchange(*argv);
-		c_nix_fdchdir(redo_dotfd);
 		if (!fflag) depwrite(redo_depfd, *argv);
 		c_std_free(*argv);
 	}
@@ -752,14 +800,17 @@ redo_whichdo(int argc, char **argv)
 	argc -= argmain->idx;
 	argv += argmain->idx;
 	if (argc - 1) whichdo_usage();
-	if (isrel(*argv)) *argv = toabs(*argv);
+	*argv = toabs(*argv);
 	s = whichdo(*argv);
 	c_std_free(*argv);
 	for (; *s; ++s) {
-		c_ioq_fmt(ioq1, "%s\n", *s);
+		c_ioq_fmt(ioq1, "%s\n", *s+redo_rootdir_len+1);
 		if (exist(*s)) break;
+		c_std_free(*s);
 	}
 	c_ioq_flush(ioq1);
+	for (; *s; ++s) c_std_free(*s);
+	c_std_free(s);
 	return 0;
 }
 
@@ -789,7 +840,6 @@ redo(int argc, char **argv)
 	}
 
 	setenv(REDO_ROOTDIR, pwd);
-	setnum(REDO_ROOTFD, redo_dotfd);
 	fflag = 1;
 	return redo_ifchange(argc, argv);
 }
@@ -802,15 +852,12 @@ main(int argc, char **argv)
 	c_std_setprogname((prog = argv[0]));
 	--argc, ++argv;
 
-	redo_dotfd = fdopen2(".", C_NIX_OREAD);
 	pwd = getpwd();
-
 	/* prepare environment */
 	redo_depfd = getnum(REDO_DEPFD);
 	if ((redo_depth = getnum(REDO_DEPTH)) < 0) redo_depth = 0;
 	if (!(redo_rootdir = c_std_getenv(REDO_ROOTDIR))) redo_rootdir = pwd;
 	redo_rootdir_len = c_str_len(redo_rootdir, -1);
-	if ((redo_rootfd = getnum(REDO_ROOTFD)) < 0) redo_rootfd = redo_dotfd;
 	/* catch flags */
 	if ((xflag = getnum(REDO_XFLAG)) < 0) xflag = 0;
 
