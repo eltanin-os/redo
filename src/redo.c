@@ -403,17 +403,12 @@ getargs(char *dofile, char *target, char *out)
 }
 
 static void
-execout(ctype_fd out, char **args)
+execout(char **args)
 {
 	ctype_id id;
-	ctype_fd fd;
-	fd = 0;
-	c_nix_fdcopy(fd, C_IOQ_FD1);
-	c_nix_fdcopy(C_IOQ_FD1, out);
 	id = c_exc_spawn0(*args, args, environ);
 	if (!id) c_err_die(1, "failed to execute %s", *args);
 	waitchild(id);
-	c_nix_fdcopy(C_IOQ_FD1, fd);
 }
 
 /* deps routines */
@@ -449,10 +444,8 @@ pathdep(char *target)
 {
 	static char buf[C_LIM_PATHMAX];
 	ctype_arr arr;
-	target = strfmt("%s", target);
 	c_arr_init(&arr, buf, sizeof(buf));
 	arrfmt(&arr, "%s/.redo/%s.dep", redo_rootdir, target);
-	c_std_free(target);
 	target = c_arr_data(&arr);
 	mkpath(dirname(target), 0777, 0777);
 	return target;
@@ -579,48 +572,35 @@ rundo(char *dofile, char *dir, char *target)
 {
 	ctype_arr arr;
 	ctype_stat st;
-	ctype_fd fd;
-	ctype_status r;
-	char fdo[] = TMPFILE;
 	char out[C_LIM_PATHMAX];
 	char **args;
 	/* redirection */
 	c_arr_init(&arr, out, sizeof(out));
 	arrfmt(&arr, "%s/%s", dir, TMPFILE);
 	c_nix_fdclose(mktemp(out, c_arr_bytes(&arr), C_NIX_OTMPANON)); /* $3 */
-	fd = mktemp(fdo, sizeof(fdo), 0); /* stdout */
 	/* env */
 	setenv(REDO_TARGET, target);
 	setnum(REDO_DEPTH, redo_depth+1);
 	/* exec */
 	args = getargs(dofile, target, out);
-	execout(fd, args);
+	execout(args);
 	c_std_free(args);
 	/* target */
-	r = 0;
 	if (exist(out)) {
 		c_nix_rename(target, out);
-		r = 1;
-	} else {
-		fdstat(&st, fd);
-		if (st.size) {
-			c_nix_rename(target, fdo);
-			r = 1;
-		}
+		return 1;
 	}
-	/* deps */
-	c_nix_fdclose(fd);
-	c_nix_unlink(fdo);
-	return r;
+	return 0;
 }
 
 static ctype_status
 ifchange(char *target)
 {
+	ctype_arr arr;
 	ctype_fd depfd;
 	ctype_status r;
 	int depth;
-	char deptmp[] = TMPFILE;
+	char deptmp[C_LIM_PATHMAX];
 	char *dep, *dir, *file;
 	char **s;
 
@@ -628,6 +608,8 @@ ifchange(char *target)
 	if (depcheck(target)) goto next;
 	dep = pathdep(target);
 
+	c_arr_init(&arr, deptmp, sizeof(deptmp));
+	arrfmt(&arr, "%s/.redo/%s", redo_rootdir, TMPFILE);
 	depfd = mktemp(deptmp, sizeof(deptmp), 0);
 	setnum(REDO_DEPFD, depfd);
 
