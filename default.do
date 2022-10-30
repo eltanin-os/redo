@@ -17,9 +17,9 @@ case -- $1 {
 	rm -f $targets
 }
 "install" {
-	foreground { redo-ifchange all }
-	foreground { install -dm 755 "${DESTDIR}/${BINDIR}" }
-	foreground { install -cm 755 src/redo "${DESTDIR}/${BINDIR}" }
+	if { redo-ifchange all }
+	if { install -dm 755 "${DESTDIR}/${BINDIR}" }
+	if { install -cm 755 src/redo "${DESTDIR}/${BINDIR}" }
 	forx -E prog { redo-$SUBPROGS } ln -s redo "${DESTDIR}/${BINDIR}/${prog}"
 }
 }

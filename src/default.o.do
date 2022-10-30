@@ -4,5 +4,5 @@ multisubstitute {
 	importas -sD "-O0 -g -std=c99 -Wall -Wextra -pedantic" CFLAGS CFLAGS
 	importas -sD "" CPPFLAGS CPPFLAGS
 }
-foreground { redo-ifchange $2 }
+if { redo-ifchange $2 }
 $CC $CFLAGS $CPPFLAGS -o $3 -c $2
