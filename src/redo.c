@@ -324,6 +324,13 @@ toabs(char *s)
 	return strfmt("%s/%s", tmp, c_gen_basename(s));
 }
 
+static usize
+pathlen(char *s)
+{
+	if (c_str_cmp(s, redo_rootdir_len, redo_rootdir)) return 0;
+	return redo_rootdir_len + 1;
+}
+
 /* utils routines */
 static void
 checkparent(void)
@@ -538,10 +545,24 @@ whichdo(char *target)
 	usize len;
 	char *ext, *s, *tmp;
 	void **ptr;
-	target = tmp = strfmt("%s", target);
-	ext = c_str_chr(c_gen_basename(tmp), -1, '.');
 	c_arr_trunc(&arr, 0, sizeof(uchar));
-	ptr = dynalloc(&arr, (len = 0), sizeof(void *));
+	len = 0;
+	if (!c_str_cmp(target, redo_rootdir_len, redo_rootdir)) {
+		target = tmp = strfmt("%s", target);
+	} else {
+		/* The database is in the root directory and the targets are
+		 * supposed to exist below it, if it's not the case limit the
+		 * recursion as we are probably dealing with a symbolic link.
+		 */
+		ptr = dynalloc(&arr, len++, sizeof(void *));
+		*ptr = strfmt("%s.do", target);
+		ptr = dynalloc(&arr, len++, sizeof(void *));
+		*ptr = strfmt("%s/default.do", dirname(target));
+		target = c_gen_basename(target);
+		target = tmp = strfmt("%s/%s", redo_rootdir, target);
+	}
+	ext = c_str_chr(c_gen_basename(tmp), -1, '.');
+	ptr = dynalloc(&arr, len, sizeof(void *));
 	*ptr = strfmt("%s.do", tmp);
 	for (;;) {
 		tmp = c_gen_dirname(tmp);
@@ -549,7 +570,7 @@ whichdo(char *target)
 		while (s) {
 			ptr = dynalloc(&arr, ++len, sizeof(void *));
 			*ptr = strfmt("%s/default%s.do", tmp, s);
-			s = c_str_chr(s+1, -1, '.');
+			s = c_str_chr(s + 1, -1, '.');
 		}
 		ptr = dynalloc(&arr, ++len, sizeof(void *));
 		*ptr = strfmt("%s/default.do", tmp);
@@ -604,8 +625,7 @@ ifchange(char *target)
 	char *dep, *dir, *file;
 	char **s;
 
-	depfd = -1;
-	if (depcheck(target)) goto next;
+	if (depcheck(target)) return 0;
 	dep = pathdep(target);
 
 	c_arr_init(&arr, deptmp, sizeof(deptmp));
@@ -625,11 +645,12 @@ ifchange(char *target)
 			goto next;
 		} else {
 			c_err_diex(1, "%s: no .do file.\n",
-			    target+redo_rootdir_len+1);
+			    target + pathlen(target));
 		}
 	}
 	depth = redo_depth << 1;
-	c_err_warnx("%*.*s %s", depth, depth, " ", target+redo_rootdir_len+1);
+	c_err_warnx("%*.*s %s",
+	    depth, depth, " ", target + pathlen(target));
 
 	dir = dirname(target);
 	file = c_gen_basename(target);
@@ -637,11 +658,10 @@ ifchange(char *target)
 	depwrite(depfd, *s);
 	c_nix_rename(dep, deptmp);
 	for (; *s; ++s) c_std_free(*s);
-	c_std_free(s);
 next:
+	c_std_free(s);
 	c_nix_fdclose(depfd);
 	c_nix_unlink(deptmp);
-	if (depfd != -1) c_nix_fdclose(depfd);
 	return 0;
 }
 
@@ -690,8 +710,9 @@ walkdeps(void (*func)(char *, usize), char *s)
 	char *args[2];
 	args[0] = s;
 	args[1] = nil;
-	if (c_dir_open(&dir, args, 0, nil) < 0)
+	if (c_dir_open(&dir, args, 0, nil) < 0) {
 		c_err_die(1, "failed to open directory \"%s\"", s);
+	}
 	while ((p = c_dir_read(&dir))) {
 		if (p->info == C_DIR_FSF) func(p->path, p->len);
 	}
@@ -786,7 +807,7 @@ redo_whichdo(int argc, char **argv)
 	s = whichdo(*argv);
 	c_std_free(*argv);
 	for (; *s; ++s) {
-		c_ioq_fmt(ioq1, "%s\n", *s+redo_rootdir_len+1);
+		c_ioq_fmt(ioq1, "%s\n", *s + pathlen(*s));
 		if (exist(*s)) break;
 		c_std_free(*s);
 	}
