@@ -302,14 +302,12 @@ getdbpath(void)
 	return c_arr_data(&arr);
 }
 
-/* XXX: slow? */
 static char *
 toabs(char *s)
 {
 	ctype_arr arr;
 	char buf[C_LIM_PATHMAX];
 	char *tmp;
-	/* enter target path */
 	c_arr_init(&arr, buf, sizeof(buf));
 	if (s[0] == '/') {
 		tmp = dirname(s);
@@ -317,18 +315,19 @@ toabs(char *s)
 		arrfmt(&arr, "%s/%s", pwd, s);
 		tmp = c_gen_dirname(c_arr_data(&arr));
 	}
-	if (c_nix_chdir(tmp) < 0) c_err_die(1, "failed to enter \"%s\"", tmp);
-	/* getcwd */
-	tmp = c_nix_getcwd(buf, sizeof(buf));
-	if (!tmp) c_err_die(1, "failed to obtain current dir");
-	return strfmt("%s/%s", tmp, c_gen_basename(s));
+	s = strfmt("%s/%s", tmp, c_gen_basename(s));
+	while ((tmp = c_str_str(s, -1, "/../"))) {
+		c_str_cpy(c_str_rchr(s, (tmp - s) - 1, '/'), -1, tmp + 3);
+	}
+	while ((tmp = c_str_str(s, -1, "/./"))) c_str_cpy(tmp, -1, tmp + 2);
+	return s;
 }
 
-static usize
-pathlen(char *s)
+static char *
+pathshrink(char *s)
 {
-	if (c_str_cmp(s, redo_rootdir_len, redo_rootdir)) return 0;
-	return redo_rootdir_len + 1;
+	if (c_str_cmp(s, redo_rootdir_len, redo_rootdir)) return s;
+	return s + redo_rootdir_len + 1;
 }
 
 /* utils routines */
@@ -545,24 +544,10 @@ whichdo(char *target)
 	usize len;
 	char *ext, *s, *tmp;
 	void **ptr;
-	c_arr_trunc(&arr, 0, sizeof(uchar));
-	len = 0;
-	if (!c_str_cmp(target, redo_rootdir_len, redo_rootdir)) {
-		target = tmp = strfmt("%s", target);
-	} else {
-		/* The database is in the root directory and the targets are
-		 * supposed to exist below it, if it's not the case limit the
-		 * recursion as we are probably dealing with a symbolic link.
-		 */
-		ptr = dynalloc(&arr, len++, sizeof(void *));
-		*ptr = strfmt("%s.do", target);
-		ptr = dynalloc(&arr, len++, sizeof(void *));
-		*ptr = strfmt("%s/default.do", dirname(target));
-		target = c_gen_basename(target);
-		target = tmp = strfmt("%s/%s", redo_rootdir, target);
-	}
+	target = tmp = strfmt("%s", target);
 	ext = c_str_chr(c_gen_basename(tmp), -1, '.');
-	ptr = dynalloc(&arr, len, sizeof(void *));
+	c_arr_trunc(&arr, 0, sizeof(uchar));
+	ptr = dynalloc(&arr, (len = 0), sizeof(void *));
 	*ptr = strfmt("%s.do", tmp);
 	for (;;) {
 		tmp = c_gen_dirname(tmp);
@@ -601,7 +586,7 @@ rundo(char *dofile, char *dir, char *target)
 	c_nix_fdclose(mktemp(out, c_arr_bytes(&arr), C_NIX_OTMPANON)); /* $3 */
 	/* env */
 	setenv(REDO_TARGET, target);
-	setnum(REDO_DEPTH, redo_depth+1);
+	setnum(REDO_DEPTH, redo_depth + 1);
 	/* exec */
 	args = getargs(dofile, target, out);
 	execout(args);
@@ -645,12 +630,12 @@ ifchange(char *target)
 			goto next;
 		} else {
 			c_err_diex(1, "%s: no .do file.\n",
-			    target + pathlen(target));
+			    pathshrink(target));
 		}
 	}
 	depth = redo_depth << 1;
 	c_err_warnx("%*.*s %s",
-	    depth, depth, " ", target + pathlen(target));
+	    depth, depth, " ", pathshrink(target));
 
 	dir = dirname(target);
 	file = c_gen_basename(target);
@@ -785,7 +770,7 @@ redo_ifchange(int argc, char **argv)
 	c_std_atexit(cleantrash);
 	r = 0;
 	for (; *argv; ++argv) {
-		dir = dirname(*argv = toabs(*argv));
+		dir = dirname((*argv = toabs(*argv)));
 		c_exc_setenv("PWD", dir);
 		c_nix_chdir(dir);
 		r |= ifchange(*argv);
@@ -807,7 +792,7 @@ redo_whichdo(int argc, char **argv)
 	s = whichdo(*argv);
 	c_std_free(*argv);
 	for (; *s; ++s) {
-		c_ioq_fmt(ioq1, "%s\n", *s + pathlen(*s));
+		c_ioq_fmt(ioq1, "%s\n", pathshrink(*s));
 		if (exist(*s)) break;
 		c_std_free(*s);
 	}
