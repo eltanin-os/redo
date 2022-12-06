@@ -57,6 +57,7 @@ cleantrash(void)
 	char **args;
 	char *argv[2];
 
+	if (!tmpfiles) return;
 	len = 0;
 	p = tmpfiles->next;
 	do { ++len; } while ((p = p->next)->prev);
@@ -127,7 +128,7 @@ arrfmt(ctype_arr *p, char *fmt, ...)
 	va_start(ap, fmt);
 	if (c_arr_vfmt(p, fmt, ap) < 0) {
 		errno = C_ERR_ENAMETOOLONG;
-		c_err_diex(1, "failed to generate path");
+		c_err_die(1, "failed to generate path");
 	}
 	va_end(ap);
 }
@@ -451,7 +452,7 @@ pathdep(char *target)
 	static char buf[C_LIM_PATHMAX];
 	ctype_arr arr;
 	c_arr_init(&arr, buf, sizeof(buf));
-	arrfmt(&arr, "%s/.redo/%s.dep", redo_rootdir, target);
+	arrfmt(&arr, "%s/.redo%s.dep", redo_rootdir, target);
 	target = c_arr_data(&arr);
 	mkpath(dirname(target), 0777, 0777);
 	return target;
