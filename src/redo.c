@@ -376,7 +376,7 @@ progname(char *dofile, int *toexec)
 	int isexec;
 	char buf[C_IOQ_BSIZ];
 	char *s;
-
+	/* check executability */
 	fd = fdopen2(dofile, C_NIX_OREAD);
 	isexec = (c_nix_fdstat(&st, fd) == 0) && (st.mode & C_NIX_IXUSR);
 	/* get first line */
