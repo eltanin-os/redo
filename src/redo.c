@@ -828,7 +828,7 @@ redo(int argc, char **argv)
 		argv = args;
 	}
 
-	setenv(REDO_ROOTDIR, pwd);
+	if (redo_depfd == -1) setenv(REDO_ROOTDIR, pwd);
 	fflag = 1;
 	return redo_ifchange(argc, argv);
 }
