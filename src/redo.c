@@ -16,7 +16,6 @@
 
 static ctype_node *tmpfiles;
 
-static ctype_fd redo_rootfd;
 static ctype_fd redo_depfd;
 static usize redo_rootdir_len;
 static int redo_depth;
@@ -55,7 +54,6 @@ cleantrash(void)
 	ctype_node *p;
 	usize len;
 	char **args;
-	char *argv[2];
 
 	if (!tmpfiles) return;
 	len = 0;
@@ -192,7 +190,7 @@ mktemp(char *s, usize n, uint opts)
 {
 	ctype_fd fd;
 	fd = c_nix_mktemp5(s, n, opts, C_NIX_OAPPEND, 0644);
-	if (fd < 0) c_err_die(1, "failed to obtain temporary file");
+	if (fd < 0) c_err_die(1, "failed to obtain temporary file \"%s\"", s);
 	trackfile(s, n);
 	return fd;
 }
@@ -578,7 +576,6 @@ static int
 rundo(char *dofile, char *dir, char *target)
 {
 	ctype_arr arr;
-	ctype_stat st;
 	char out[C_LIM_PATHMAX];
 	char **args;
 	/* redirection */
@@ -605,7 +602,6 @@ ifchange(char *target)
 {
 	ctype_arr arr;
 	ctype_fd depfd;
-	ctype_status r;
 	int depth;
 	char deptmp[C_LIM_PATHMAX];
 	char *dep, *dir, *file;
