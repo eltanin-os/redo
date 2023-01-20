@@ -1,6 +1,7 @@
 #!/bin/execlineb -S3
 multisubstitute {
-	importas -D "/usr/local" DESTDIR DESTDIR
+	importas -D "" DESTDIR DESTDIR
+	importas -D "/usr/local" PREFIX PREFIX
 	importas -D "/bin" BINDIR BINDIR
 	importas -D "/share/man" MANDIR MANDIR
 	define -s SUBPROGS "always ifchange ifcreate ood sources stamp targets whichdo"
@@ -20,11 +21,11 @@ case -- $1 {
 }
 "install" {
 	if { redo-ifchange all }
-	if { install -dm 755 "${DESTDIR}/${MANDIR}/man1" }
-	if { install -dm 755 "${DESTDIR}/${BINDIR}" }
-	if { install -cm 644 $MANPAGES "${DESTDIR}/${MANDIR}/man1" }
-	if { install -cm 755 src/redo "${DESTDIR}/${BINDIR}" }
-	forx -E prog { redo-$SUBPROGS } ln -s redo "${DESTDIR}/${BINDIR}/${prog}"
+	if { install -dm 755 "${DESTDIR}/${PREFIX}/${MANDIR}/man1" }
+	if { install -dm 755 "${DESTDIR}/${PREFIX}/${BINDIR}" }
+	if { install -cm 644 $MANPAGES "${DESTDIR}/${PREFIX}/${MANDIR}/man1" }
+	if { install -cm 755 src/redo "${DESTDIR}/${PREFIX}/${BINDIR}" }
+	forx -E prog { redo-$SUBPROGS } ln -s redo "${DESTDIR}/${PREFIX}/${BINDIR}/${prog}"
 }
 }
 foreground {
