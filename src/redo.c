@@ -559,6 +559,7 @@ whichdo(char *target)
 		ptr = dynalloc(&arr, ++len, sizeof(void *));
 		*ptr = strfmt("%s/default.do", tmp);
 		if (!c_str_cmp(tmp, -1, redo_rootdir)) break;
+		if (!c_str_cmp(tmp, -1, "/")) break;
 	}
 	c_std_free(target);
 	ptr = dynalloc(&arr, ++len, sizeof(void *));
@@ -823,9 +824,7 @@ redo(int argc, char **argv)
 		argc = 1;
 		argv = args;
 	}
-
-	if (redo_depfd == -1) setenv(REDO_ROOTDIR, pwd);
-	fflag = 1;
+	if (redo_depfd == - 1) setenv(REDO_ROOTDIR, pwd);
 	return redo_ifchange(argc, argv);
 }
 
@@ -851,13 +850,14 @@ main(int argc, char **argv)
 	prog = c_gen_basename(prog);
 	if (!C_STR_SCMP("redo", prog)) {
 		mkpath(s, 0777, 0777);
+		fflag = 1;
 		return redo(argc, argv);
 	} else if (!C_STR_SCMP("redo-always", prog)) {
 		checkparent();
 		noargs(argc, argv);
 		always(redo_depfd);
 	} else if (!C_STR_SCMP("redo-ifchange", prog)) {
-		checkparent();
+		if (redo_depfd == -1) return redo(argc, argv);
 		if (c_std_noopt(argmain, *argv)) default1_usage();
 		argv += argmain->idx;
 		return redo_ifchange(argc, argv);
