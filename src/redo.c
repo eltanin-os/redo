@@ -86,24 +86,13 @@ trackfile(char *s, usize n)
 
 /* fmt routines */
 static ctype_status
-hex32(ctype_fmt *p)
+hex(ctype_fmt *p)
 {
-	u32 x;
-	char buf[sizeof(u32)];
-	x = va_arg(p->args, u32);
-	c_uint_32pack(buf, x);
-	for (int i = 0; i < 4; ++i) c_fmt_print(p, "%02x", (uchar)buf[i]);
-	return 0;
-}
-
-static ctype_status
-hex64(ctype_fmt *p)
-{
-	u64 x;
-	char buf[sizeof(u64)];
-	x = va_arg(p->args, u64);
-	c_uint_64pack(buf, x);
-	for (int i = 0; i < 8; ++i) c_fmt_print(p, "%02x", (uchar)buf[i]);
+	int len, i;
+	uchar *s;
+	len = va_arg(p->args, int);
+	s = va_arg(p->args, uchar*);
+	for (i = 0; i < len; ++i) c_fmt_print(p, "%02x", s[i]);
 	return 0;
 }
 
@@ -416,32 +405,68 @@ execout(char **args)
 	waitchild(id);
 }
 
+static int
+cmp(void *va, void *vb)
+{
+	ctype_dent *a, *b;
+	a = va;
+	b = vb;
+	return c_str_cmp(a->name, C_STD_MIN(a->nlen, b->nlen), b->name);
+}
+
+static void
+hashfd(ctype_hst *h, ctype_fd fd, ctype_stat *sp, char *s)
+{
+	ctype_dir dir;
+	ctype_dent *p;
+	usize n;
+	char *args[2];
+
+	if (!C_NIX_ISDIR(sp->mode)) {
+		c_hsh_putfd(h, c_hsh_md5, fd, sp->size);
+		return;
+	}
+
+	args[0] = s;
+	args[1] = nil;
+	if (c_dir_open(&dir, args, 0, &cmp) < 0) return; /* XXX */
+	n = c_str_len(s, -1);
+
+	while ((p = c_dir_read(&dir))) {
+		switch (p->info) {
+		case C_DIR_FSD:
+			c_hsh_md5->update(h, p->path + n, p->len - n);
+			/* FALLTHROUGH */
+		case C_DIR_FSDP:
+			continue;
+		case C_DIR_FSDNR:
+		case C_DIR_FSNS:
+		case C_DIR_FSERR:
+			continue;
+		}
+		c_hsh_putfile(h, c_hsh_md5, p->path);
+	}
+}
+
 /* deps routines */
 static int
 modified(ctype_fd fd, char *s)
 {
+	ctype_hst hs;
 	ctype_stat st;
-	char buf[sizeof(u64)];
-	/* last modification time */
+	ctype_taia t;
+	char buf[C_HSH_MD5DIG];
+	/* taia */
 	fdstat(&st, fd);
-	c_uint_32pack(buf, st.mtim.sec);
-	if (hexcmp(s+1, sizeof(u32), buf)) return 1;
-	/* size */
-	c_uint_64pack(buf, st.size);
-	if (hexcmp(s+10, sizeof(u64), buf)) return 1;
-	/* inode */
-	c_uint_64pack(buf, st.ino);
-	if (hexcmp(s+27, sizeof(u64), buf)) return 1;
-	/* file mode */
-	c_uint_32pack(buf, st.mode);
-	if (hexcmp(s+44, sizeof(u32), buf)) return 1;
-	/* user id */
-	c_uint_32pack(buf, st.uid);
-	if (hexcmp(s+53, sizeof(u32), buf)) return 1;
-	/* group id */
-	c_uint_32pack(buf, st.gid);
-	if (hexcmp(s+62, sizeof(u32), buf)) return 1;
-	return 0;
+	c_taia_fromtime(&t, &st.mtim);
+	c_taia_pack(buf, &t);
+	if (!hexcmp(s+1, C_TAIA_PACK, buf)) return 0;
+	/* hash */
+	c_hsh_md5->init(&hs);
+	hashfd(&hs, fd, &st, s+67);
+	c_hsh_md5->end(&hs, buf);
+	if (!hexcmp(s+34, C_HSH_MD5DIG, buf)) return 0;
+	return 1;
 }
 
 static char *
@@ -480,9 +505,8 @@ depcheck(char *target)
 			if (exist(s+1)) ok = 0;
 			break;
 		case '=': /* check */
-			/* TYPE(+0),MTIME(+1),SIZE(+10),INODE(+27),
-			 * MODE(+44),UID(+53),GID(+62),NAME(+71) */
-			if ((fd = c_nix_fdopen2(s+71, C_NIX_OREAD)) < 0) {
+			/* TYPE(+0),TAIA(+1),MD5(+34),NAME(+67) */
+			if ((fd = c_nix_fdopen2(s+67, C_NIX_OREAD)) < 0) {
 				ok = 0;
 				c_arr_trunc(&arr, 0, sizeof(uchar));
 				continue;
@@ -490,10 +514,10 @@ depcheck(char *target)
 			if (modified(fd, s)) {
 				ok = 0;
 			} else {
-				if (c_str_cmp(target, -1, s+71)) {
-				if (C_STR_SCMP(".do",
-				    s+((c_arr_bytes(&arr)))-3))
-					ok = depcheck(s+71);
+				if (c_str_cmp(target, -1, s+67)) {
+					if (C_STR_SCMP(".do",
+					    s+((c_arr_bytes(&arr)))-3))
+						ok = depcheck(s+67);
 				}
 			}
 			c_nix_fdclose(fd);
@@ -514,19 +538,28 @@ depcheck(char *target)
 }
 
 static void
-depwrite(ctype_fd fd, char *dep)
+depwrite(ctype_fd ofd, char *dep)
 {
-	static int first = 1;
+	ctype_fd fd;
+	ctype_hst hs;
+	ctype_taia t;
 	ctype_stat st;
-	if (fd < 0) return;
-	c_nix_stat(&st, dep);
-	if (first) {
-		c_fmt_install('a', &hex32);
-		c_fmt_install('b', &hex64);
-		first = 0;
-	}
-	fdfmt(fd, "=%a %b %b %a %a %a %s\n",
-	    st.mtim.sec, st.size, st.ino, st.mode, st.uid, st.gid, dep);
+	char abuf[C_TAIA_PACK];
+	char bbuf[C_HSH_MD5DIG];
+
+	if (ofd < 0) return;
+	fd = c_nix_fdopen2(dep, C_NIX_OREAD);
+	c_nix_fdstat(&st, fd);
+	/* timestamp */
+	c_taia_fromtime(&t, &st.mtim);
+	c_taia_pack(abuf, &t);
+	/* hash */
+	c_hsh_md5->init(&hs);
+	hashfd(&hs, fd, &st, dep);
+	c_hsh_md5->end(&hs, bbuf);
+	/* write */
+	c_nix_fdclose(fd);
+	fdfmt(ofd, "=%H %H %s\n", sizeof(abuf), abuf, sizeof(bbuf), bbuf, dep);
 }
 
 /* do routines */
@@ -674,7 +707,7 @@ sources(char *dep, usize n)
 		c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar));
 		s = c_arr_data(&arr);
 		if (*s != '=') goto next;
-		s = s + 71;
+		s = s + 67;
 		if (exist(s) && !exist(pathdep(s))) {
 			if (c_adt_kvadd(&t, s, nil) == 1) goto next;
 			c_ioq_fmt(ioq1, "%s\n", s);
@@ -769,6 +802,7 @@ redo_ifchange(int argc, char **argv)
 	r = 0;
 	for (; *argv; ++argv) {
 		dir = dirname((*argv = toabs(*argv)));
+		mkpath(dir, 0755, 0755);
 		c_exc_setenv("PWD", dir);
 		c_nix_chdir(dir);
 		r |= ifchange(*argv);
@@ -846,6 +880,7 @@ main(int argc, char **argv)
 	if ((xflag = getnum(REDO_XFLAG)) < 0) xflag = 0;
 
 	/* main routines */
+	c_fmt_install('H', &hex);
 	s = getdbpath();
 	prog = c_gen_basename(prog);
 	if (!C_STR_SCMP("redo", prog)) {
