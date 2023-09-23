@@ -1,16 +1,28 @@
-.Dd $Mdocdate: June 04 2022 $
-.Dt REDO-OOD 1
+.Dd $Mdocdate: September 22 2023 $
+.Dt REDO-TARGETS 1
 .Os
 .Sh NAME
-.Nm redo-ood
+.Nm redo-targets
 .Nd write a list of targets to the standard output
 .Sh SYNOPSIS
 .Nm
+.Op Ar path
 .Sh DESCRIPTION
 The
 .Nm
-utility descends recursively through the database
-.Pq .redo ,
+utility lists all targets that depends on the source
+.Ar path .
+If
+.Ar path
+is a directory,
+.Nm
+recursively lists all targets in that directory.
+If no
+.Ar path
+is specified,
+.Nm
+recursively descends through the database
+.Pq .redo
 writing every target to the standard output.
 .Sh EXIT STATUS
 .Ex -std

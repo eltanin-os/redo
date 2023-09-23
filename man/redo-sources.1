@@ -1,16 +1,28 @@
-.Dd $Mdocdate: June 04 2022 $
-.Dt REDO-OOD 1
+.Dd $Mdocdate: September 22 2023 $
+.Dt REDO-SOURCES 1
 .Os
 .Sh NAME
-.Nm redo-ood
+.Nm redo-sources
 .Nd write a list of source files to the standard output
 .Sh SYNOPSIS
 .Nm
+.Op Ar path
 .Sh DESCRIPTION
 The
 .Nm
-utility descends recursively through the database
-.Pq .redo ,
+utility lists all the dependencies from the target
+.Ar path .
+If
+.Ar path
+is a directory,
+.Nm
+recursively lists all the dependencies of any target in that directory.
+If no
+.Ar path
+is specified,
+.Nm
+recursively descends through the database
+.Pq .redo
 writing every source file to the standard output.
 .Sh EXIT STATUS
 .Ex -std

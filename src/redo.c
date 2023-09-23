@@ -1,7 +1,18 @@
+/* TODO: Once API is completely set, refactor heavily */
 #include <tertium/cpu.h>
 #include <tertium/std.h>
 
+#define USAGE_REDO " [-j jobs] [-x] [target ...]"
+#define USAGE_DEF0 " [path]"
+#define USAGE_DEF1 " [path ...]"
+#define USAGE_DEF2 ""
+
 #define arglist(...) arglist_(__VA_ARGS__, nil)
+#define noopt(argc, argv, func) { \
+ if (c_std_noopt(argmain, *(argv))) (func); \
+ argc -= argmain->idx; \
+ argv += argmain->idx; \
+}
 
 #define TMPFILE ".tmpfile.XXXXXXXXX"
 
@@ -160,10 +171,10 @@ dynfmt(ctype_arr *p, char *fmt, ...)
 }
 
 static size
-getln(ctype_ioq *p, ctype_arr *ap)
+getln(ctype_arr *ap, ctype_ioq *p)
 {
 	size r;
-	if ((r = c_ioq_getln(p, ap)) < 0) c_err_diex(1, nil);
+	if ((r = c_ioq_getln(ap, p)) < 0) c_err_diex(1, nil);
 	return r;
 }
 
@@ -184,15 +195,15 @@ mktemp(char *s, usize n, uint opts)
 	return fd;
 }
 
-static char *
-strfmt(char *fmt, ...)
+static usize
+strfmt(char **sp, char *fmt, ...)
 {
 	va_list ap;
-	char *tmp;
+	size len;
 	va_start(ap, fmt);
-	if (c_str_vfmt(&tmp, fmt, ap) < 0) c_err_diex(1, nil);
+	if ((len = c_str_vfmt(sp, fmt, ap)) < 0) c_err_diex(1, nil);
 	va_end(ap);
-	return tmp;
+	return (usize)len;
 }
 
 static void
@@ -258,7 +269,7 @@ static char *
 dirname(char *s)
 {
 	static char buf[C_LIM_PATHMAX];
-	c_str_cpy(buf, -1, s);
+	c_str_cpy(buf, sizeof(buf), s);
 	return c_gen_dirname(buf);
 }
 
@@ -291,6 +302,31 @@ getdbpath(void)
 }
 
 static char *
+sanitize(char *path)
+{
+	char *end = path + c_str_len(path, -1) + 1;
+	char *q, *s;
+	s = path;
+	c_str_rtrim(s, end - s, "./");
+	while ((s = c_mem_chr(s, end - s, '/'))) {
+		q = ++s;
+		if (q[0] == '/') {
+			for (; *q == '/'; ++q) ;
+		} else if (q[0] == '.' && q[1] == '/') {
+			q += 2;
+		} else if (q[0] == '.' && q[1] == '.' && q[2] == '/') {
+			for (--s; s[-1] != '/'; --s) ;
+			q += 3;
+		} else {
+			continue;
+		}
+		c_mem_cpy(s, q, end - q);
+		--s;
+	}
+	return path;
+}
+
+static char *
 toabs(char *s)
 {
 	ctype_arr arr;
@@ -303,12 +339,8 @@ toabs(char *s)
 		arrfmt(&arr, "%s/%s", pwd, s);
 		tmp = c_gen_dirname(c_arr_data(&arr));
 	}
-	s = strfmt("%s/%s", tmp, c_gen_basename(s));
-	while ((tmp = c_str_str(s, -1, "/../"))) {
-		c_str_cpy(c_str_rchr(s, (tmp - s) - 1, '/'), -1, tmp + 3);
-	}
-	while ((tmp = c_str_str(s, -1, "/./"))) c_str_cpy(tmp, -1, tmp + 2);
-	return s;
+	strfmt(&s, "%s/%s", tmp, c_gen_basename(s));
+	return sanitize(s);
 }
 
 static char *
@@ -369,7 +401,7 @@ progname(char *dofile, int *toexec)
 	/* get first line */
 	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
 	c_arr_trunc(&arr, 0, sizeof(uchar));
-	if (!getln(&ioq, &arr)) goto shfallback;
+	if (!getln(&arr, &ioq)) goto shfallback;
 	c_nix_fdclose(fd);
 	/* check for shellbang */
 	c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar)); /* linefeed */
@@ -477,7 +509,7 @@ pathdep(char *target)
 	c_arr_init(&arr, buf, sizeof(buf));
 	arrfmt(&arr, "%s/.redo%s.dep", redo_rootdir, target);
 	target = c_arr_data(&arr);
-	mkpath(dirname(target), 0777, 0777);
+	mkpath(dirname(target), 0755, 0755);
 	return target;
 }
 
@@ -488,7 +520,7 @@ depcheck(char *target)
 	ctype_arr arr;
 	ctype_fd fd;
 	int ok;
-	char buf[C_IOQ_BSIZ];
+	char buf[C_IOQ_SMALLBSIZ];
 	char *dep, *s;
 
 	if (fflag) return 0;
@@ -497,7 +529,7 @@ depcheck(char *target)
 	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
 	c_mem_set(&arr, sizeof(arr), 0);
 	ok = 1;
-	while (ok && getln(&ioq, &arr)) {
+	while (ok && getln(&arr, &ioq)) {
 		c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar));
 		s = c_arr_data(&arr);
 		switch (*s) {
@@ -569,28 +601,29 @@ always(ctype_fd fd)
 	return fdfmt(fd, "!\n");
 }
 
-static char **
+static void *
 whichdo(char *target)
 {
 	static ctype_arr arr;
 	usize len;
 	char *ext, *s, *tmp;
-	void **ptr;
-	target = tmp = strfmt("%s", target);
+	char **ptr;
+	strfmt(&tmp, "%s", target);
+	target = tmp;
 	ext = c_str_chr(c_gen_basename(tmp), -1, '.');
 	c_arr_trunc(&arr, 0, sizeof(uchar));
 	ptr = dynalloc(&arr, (len = 0), sizeof(void *));
-	*ptr = strfmt("%s.do", tmp);
+	strfmt(ptr, "%s.do", tmp);
 	for (;;) {
 		tmp = c_gen_dirname(tmp);
 		s = ext;
 		while (s) {
 			ptr = dynalloc(&arr, ++len, sizeof(void *));
-			*ptr = strfmt("%s/default%s.do", tmp, s);
+			strfmt(ptr, "%s/default%s.do", tmp, s);
 			s = c_str_chr(s + 1, -1, '.');
 		}
 		ptr = dynalloc(&arr, ++len, sizeof(void *));
-		*ptr = strfmt("%s/default.do", tmp);
+		strfmt(ptr, "%s/default.do", tmp);
 		if (!c_str_cmp(tmp, -1, redo_rootdir)) break;
 		if (!c_str_cmp(tmp, -1, "/")) break;
 	}
@@ -682,35 +715,39 @@ next:
 }
 
 static void
-targets(char *dep, usize n)
+sources(char *dep, usize n, char *file)
 {
-	dep[(n -= 4)] = 0; /* strip ".dep" */
-	dep += redo_rootdir_len + 6; /* strip db path $PWD/.redo/ */
-	if (!fflag && depcheck(dep)) return;
-	if (exist(dep)) c_ioq_fmt(ioq1, "%s\n", dep);
-}
-
-static void
-sources(char *dep, usize n)
-{
-	static ctype_kvtree t; /* "memory leak" */
-	static ctype_arr arr; /* "memory leak" */
-	ctype_fd fd;
+	static ctype_kvtree t;
+	static ctype_arr arr;
 	ctype_ioq ioq;
-	char *s;
+	ctype_fd fd;
 	char buf[C_IOQ_BSIZ];
+	char *s;
+
+	if (file) file = toabs(file);
 	(void)n;
 	fd = fdopen2(dep, C_NIX_OREAD);
 	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
+
 	c_arr_trunc(&arr, 0, sizeof(uchar));
-	while (getln(&ioq, &arr) > 0) {
+	while (getln(&arr, &ioq)) {
 		c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar));
 		s = c_arr_data(&arr);
 		if (*s != '=') goto next;
 		s = s + 67;
-		if (exist(s) && !exist(pathdep(s))) {
+		if (fflag) {
+			if (c_str_cmp(file, n, s)) goto next;
+			dep[n - 4] = 0; /* strip ".dep" */
+			dep = dep + redo_rootdir_len + 6; /* strip db path */
+			c_ioq_fmt(ioq1, "%s\n", dep);
+			return;
+		} else {
 			if (c_adt_kvadd(&t, s, nil) == 1) goto next;
 			c_ioq_fmt(ioq1, "%s\n", s);
+			if (file) {
+				s = pathdep(s);
+				if (exist(s)) sources(s, c_str_len(s, -1), file);
+			}
 		}
 next:
 		c_arr_trunc(&arr, 0, sizeof(uchar));
@@ -719,57 +756,60 @@ next:
 }
 
 static void
-walkdeps(void (*func)(char *, usize), char *s)
+sourcefile(char *dep, usize n, char *file)
+{
+	if (file && c_str_cmp(dep, n, pathdep(toabs(file)))) return;
+	sources(dep, n, nil);
+}
+
+static void
+targets(char *dep, usize n, char *file)
+{
+	if (file && fflag) {
+		sources(dep, n, file);
+		return;
+	}
+
+	dep[n - 4] = 0; /* strip ".dep" */
+	dep = dep + redo_rootdir_len + 6; /* strip db path */
+	if (fflag) {
+		if (!exist(dep)) return;
+	} else if (depcheck(dep)) {
+		return;
+	}
+	c_ioq_fmt(ioq1, "%s\n", dep);
+}
+
+static void
+walkdeps(void (*func)(char *, usize, char *), char *s)
 {
 	ctype_dir dir;
+	ctype_stat st;
 	ctype_dent *p;
 	char *args[2];
-	args[0] = s;
+
+	args[0] = getdbpath();
 	args[1] = nil;
-	if (c_dir_open(&dir, args, 0, nil) < 0) {
-		c_err_die(1, "failed to open directory \"%s\"", s);
+	if (c_nix_stat(&st, s) == 0 && C_NIX_ISDIR(st.mode)) {
+		strfmt(&args[0], "%s/.redo%s", redo_rootdir, toabs(s));
+		s = nil;
 	}
+	if (c_dir_open(&dir, args, 0, nil) < 0) {
+		c_err_die(1, "failed to open directory \"%s\"", *args);
+	}
+
 	while ((p = c_dir_read(&dir))) {
-		if (p->info == C_DIR_FSF) func(p->path, p->len);
+		if (p->info == C_DIR_FSF) func(p->path, p->len, s);
 	}
 	c_dir_close(&dir);
+	c_std_free(args[0]);
 }
 
 /* usage routines */
 static void
-default1_usage(void)
+usage(char *msg)
 {
-	c_ioq_fmt(ioq2, "usage: %s [path ...]\n", c_std_getprogname());
-	c_std_exit(1);
-}
-
-static void
-default2_usage(void)
-{
-	c_ioq_fmt(ioq2, "usage: %s\n", c_std_getprogname());
-	c_std_exit(1);
-}
-
-static void
-noargs(int argc, char **argv)
-{
-	if (c_std_noopt(argmain, *argv)) default2_usage();
-	argc -= argmain->idx;
-	if (argc) default2_usage();
-}
-
-static void
-redo_usage(void)
-{
-	c_ioq_fmt(ioq2, "usage: %s [-j jobs] [-x] [target ...]\n",
-	    c_std_getprogname());
-	c_std_exit(1);
-}
-
-static void
-whichdo_usage(void)
-{
-	c_ioq_fmt(ioq2, "usage: %s [target]\n", c_std_getprogname());
+	c_ioq_fmt(ioq2, "usage: %s%s\n", c_std_getprogname(), msg);
 	c_std_exit(1);
 }
 
@@ -779,7 +819,7 @@ redo_ifcreate(int argc, char **argv)
 {
 	ctype_status r;
 	(void)argc;
-	if (c_std_noopt(argmain, *argv)) default1_usage();
+	if (c_std_noopt(argmain, *argv)) usage(USAGE_DEF1);
 	argv += argmain->idx;
 	r = 0;
 	for (; *argv; ++argv) {
@@ -816,10 +856,10 @@ static ctype_status
 redo_whichdo(int argc, char **argv)
 {
 	char **s;
-	if (c_std_noopt(argmain, *argv)) whichdo_usage();
+	if (c_std_noopt(argmain, *argv)) usage(USAGE_DEF0);
 	argc -= argmain->idx;
 	argv += argmain->idx;
-	if (argc - 1) whichdo_usage();
+	if (argc - 1) usage(USAGE_DEF0);
 	*argv = toabs(*argv);
 	s = whichdo(*argv);
 	c_std_free(*argv);
@@ -848,7 +888,7 @@ redo(int argc, char **argv)
 			setnum(REDO_XFLAG, (xflag = 1));
 			break;
 		default:
-			redo_usage();
+			usage(USAGE_REDO);
 		}
 	}
 	argc -= argmain->idx;
@@ -865,7 +905,7 @@ redo(int argc, char **argv)
 ctype_status
 main(int argc, char **argv)
 {
-	char *prog, *s;
+	char *prog;
 
 	c_std_setprogname((prog = argv[0]));
 	--argc, ++argv;
@@ -881,40 +921,40 @@ main(int argc, char **argv)
 
 	/* main routines */
 	c_fmt_install('H', &hex);
-	s = getdbpath();
 	prog = c_gen_basename(prog);
 	if (!C_STR_SCMP("redo", prog)) {
-		mkpath(s, 0777, 0777);
+		mkpath(getdbpath(), 0755, 0755);
 		fflag = 1;
 		return redo(argc, argv);
 	} else if (!C_STR_SCMP("redo-always", prog)) {
 		checkparent();
-		noargs(argc, argv);
+		noopt(argc, argv, usage(USAGE_DEF2));
+		if (argc) usage(USAGE_DEF2);
 		always(redo_depfd);
 	} else if (!C_STR_SCMP("redo-ifchange", prog)) {
 		if (redo_depfd == -1) return redo(argc, argv);
-		if (c_std_noopt(argmain, *argv)) default1_usage();
-		argv += argmain->idx;
+		noopt(argc, argv, usage(USAGE_DEF1))
 		return redo_ifchange(argc, argv);
 	} else if (!C_STR_SCMP("redo-ifcreate", prog)) {
 		checkparent();
 		return redo_ifcreate(argc, argv);
 	} else if (!C_STR_SCMP("redo-ood", prog)) {
-		noargs(argc, argv);
-		walkdeps(targets, s);
+		noopt(argc, argv, usage(USAGE_DEF0));
+		walkdeps(targets, *argv);
 		c_ioq_flush(ioq1);
 	} else if (!C_STR_SCMP("redo-sources", prog)) {
-		noargs(argc, argv);
-		walkdeps(sources, s);
+		noopt(argc, argv, usage(USAGE_DEF0));
+		walkdeps(argc ? sourcefile : sources, *argv);
 		c_ioq_flush(ioq1);
 	} else if (!C_STR_SCMP("redo-stamp", prog)) {
 		/* DUMMY */
-		noargs(argc, argv);
+		noopt(argc, argv, usage(USAGE_DEF2));
+		if (argc) usage(USAGE_DEF2);
 		return 0;
 	} else if (!C_STR_SCMP("redo-targets", prog)) {
-		noargs(argc, argv);
+		noopt(argc, argv, usage(USAGE_DEF0));
 		fflag = 1;
-		walkdeps(targets, s);
+		walkdeps(targets, *argv);
 		c_ioq_flush(ioq1);
 	} else if (!C_STR_SCMP("redo-whichdo", prog)) {
 		return redo_whichdo(argc, argv);

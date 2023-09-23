@@ -1,4 +1,4 @@
-.Dd $Mdocdate: June 04 2022 $
+.Dd $Mdocdate: Semptember 22 2023 $
 .Dt REDO-OOD 1
 .Os
 .Sh NAME
@@ -6,11 +6,23 @@
 .Nd write a list of out-of-date targets to the standard output
 .Sh SYNOPSIS
 .Nm
+.Op Ar path
 .Sh DESCRIPTION
 The
 .Nm
-utility descends recursively through the database
-.Pq .redo ,
+utility lists all out-of-date targets that depends on the source
+.Ar path .
+If
+.Ar path
+is a directory,
+.Nm
+recursively lists all out-of-date targets in that directory.
+If no
+.Ar path
+is specified,
+.Nm
+recursively descends through the database
+.Pq .redo
 writing every out-of-date target to the standard output.
 .Sh EXIT STATUS
 .Ex -std
