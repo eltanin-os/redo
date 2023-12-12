@@ -302,28 +302,16 @@ getdbpath(void)
 }
 
 static char *
-sanitize(char *path)
+sanitize(char *s)
 {
-	char *end = path + c_str_len(path, -1) + 1;
-	char *q, *s;
-	s = path;
-	c_str_rtrim(s, end - s, "./");
-	while ((s = c_mem_chr(s, end - s, '/'))) {
-		q = ++s;
-		if (q[0] == '/') {
-			for (; *q == '/'; ++q) ;
-		} else if (q[0] == '.' && q[1] == '/') {
-			q += 2;
-		} else if (q[0] == '.' && q[1] == '.' && q[2] == '/') {
-			for (--s; s[-1] != '/'; --s) ;
-			q += 3;
-		} else {
-			continue;
-		}
-		c_mem_cpy(s, q, end - q);
-		--s;
+	char *tmp;
+	c_str_rtrim(s, -1, "./");
+	while ((tmp = c_str_str(s, -1, "//"))) c_str_cpy(tmp, -1, tmp + 1);
+	while ((tmp = c_str_str(s, -1, "/./"))) c_str_cpy(tmp, -1, tmp + 2);
+	while ((tmp = c_str_str(s, -1, "/../"))) {
+		c_str_cpy(c_str_rchr(s, (tmp - s) - 1, '/'), -1, tmp + 3);
 	}
-	return path;
+	return s;
 }
 
 static char *
@@ -557,6 +545,9 @@ depcheck(char *target)
 		case '+': /* target must exist */
 			if (!exist(s+1)) ok = 0;
 			break;
+		case '@':
+			ok = depcheck(s+1);
+			break;
 		case '!': /* always */
 			/* XXX: once per run */
 		default:
@@ -573,25 +564,25 @@ static void
 depwrite(ctype_fd ofd, char *dep)
 {
 	ctype_fd fd;
-	ctype_hst hs;
-	ctype_taia t;
+	ctype_hst h;
+	ctype_taia time;
 	ctype_stat st;
-	char abuf[C_TAIA_PACK];
-	char bbuf[C_HSH_MD5DIG];
+	char hash[C_HSH_MD5DIG];
+	char tm[C_TAIA_PACK];
 
 	if (ofd < 0) return;
 	fd = c_nix_fdopen2(dep, C_NIX_OREAD);
 	c_nix_fdstat(&st, fd);
 	/* timestamp */
-	c_taia_fromtime(&t, &st.mtim);
-	c_taia_pack(abuf, &t);
+	c_taia_fromtime(&time, &st.mtim);
+	c_taia_pack(tm, &time);
 	/* hash */
-	c_hsh_md5->init(&hs);
-	hashfd(&hs, fd, &st, dep);
-	c_hsh_md5->end(&hs, bbuf);
+	c_hsh_md5->init(&h);
+	hashfd(&h, fd, &st, dep);
+	c_hsh_md5->end(&h, hash);
 	/* write */
 	c_nix_fdclose(fd);
-	fdfmt(ofd, "=%H %H %s\n", sizeof(abuf), abuf, sizeof(bbuf), bbuf, dep);
+	fdfmt(ofd, "=%H %H %s\n", sizeof(tm), tm, sizeof(hash), hash, dep);
 }
 
 /* do routines */
@@ -846,7 +837,13 @@ redo_ifchange(int argc, char **argv)
 		c_exc_setenv("PWD", dir);
 		c_nix_chdir(dir);
 		r |= ifchange(*argv);
-		if (!fflag) depwrite(redo_depfd, *argv);
+		if (!fflag) {
+			if (exist(*argv)) {
+				depwrite(redo_depfd, *argv);
+			} else {
+				fdfmt(redo_depfd, "@%s\n", *argv);
+			}
+		}
 		c_std_free(*argv);
 	}
 	return r;
