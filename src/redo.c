@@ -480,13 +480,13 @@ modified(ctype_fd fd, char *s)
 	fdstat(&st, fd);
 	c_taia_fromtime(&t, &st.mtim);
 	c_taia_pack(buf, &t);
-	if (!hexcmp(s+1, C_TAIA_PACK, buf)) return 0;
+	if (!hexcmp(s+1, C_TAIA_PACK, buf)) return 1;
 	/* hash */
 	c_hsh_md5->init(&hs);
 	hashfd(&hs, fd, &st, s+67);
 	c_hsh_md5->end(&hs, buf);
-	if (!hexcmp(s+34, C_HSH_MD5DIG, buf)) return 0;
-	return 1;
+	if (!hexcmp(s+34, C_HSH_MD5DIG, buf)) return 2;
+	return 0;
 }
 
 static char *
@@ -502,6 +502,50 @@ pathdep(char *target)
 }
 
 static int
+rebuild(char *dep)
+{
+	ctype_stat st;
+	ctype_taia time;
+	ctype_ioq ioq;
+	ctype_arr arr;
+	ctype_fd depfd, fd;
+	char deptmp[C_LIM_PATHMAX];
+	char buf[C_IOQ_SMALLBSIZ];
+	char tm[C_TAIA_PACK];
+	char *s;
+
+	if ((depfd = c_nix_fdopen2(dep, C_NIX_OREAD)) < 0) return 0;
+
+	c_arr_init(&arr, deptmp, sizeof(deptmp));
+	arrfmt(&arr, "%s/.redo/%s", redo_rootdir, TMPFILE);
+	fd = mktemp(deptmp, sizeof(deptmp), 0);
+
+	c_mem_set(&arr, sizeof(arr), 0);
+	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
+	while (getln(&arr, &ioq)) {
+		c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar));
+		s = c_arr_data(&arr);
+		switch (*s) {
+		case '=': /* check */
+			/* TYPE(+0),TAIA(+1),MD5(+34),NAME(+67) */
+			if (c_nix_stat(&st, s + 67) < 0) return 0;
+			c_taia_fromtime(&time, &st.mtim);
+			c_taia_pack(tm, &time);
+			fdfmt(fd, "%c%H%s\n", *s, sizeof(tm), tm, s + 33);
+			break;
+		default:
+			fdfmt(fd, "%s\n", s);
+		}
+		c_arr_trunc(&arr, 0, sizeof(uchar));
+	}
+	c_dyn_free(&arr);
+	c_nix_fdclose(depfd);
+	c_nix_fdclose(fd);
+	if (c_nix_rename(dep, deptmp) < 0) return 0;
+	return 1;
+}
+
+static int
 depcheck(char *target)
 {
 	ctype_ioq ioq;
@@ -512,8 +556,10 @@ depcheck(char *target)
 	char *dep, *s;
 
 	if (fflag) return 0;
+
 	dep = pathdep(target);
 	if ((fd = c_nix_fdopen2(dep, C_NIX_OREAD)) < 0) return exist(target);
+
 	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
 	c_mem_set(&arr, sizeof(arr), 0);
 	ok = 1;
@@ -522,31 +568,40 @@ depcheck(char *target)
 		s = c_arr_data(&arr);
 		switch (*s) {
 		case '-': /* ifcreate */
-			if (exist(s+1)) ok = 0;
+			if (exist(s + 1)) ok = 0;
 			break;
 		case '=': /* check */
 			/* TYPE(+0),TAIA(+1),MD5(+34),NAME(+67) */
-			if ((fd = c_nix_fdopen2(s+67, C_NIX_OREAD)) < 0) {
+			if ((fd = c_nix_fdopen2(s + 67, C_NIX_OREAD)) < 0) {
 				ok = 0;
 				c_arr_trunc(&arr, 0, sizeof(uchar));
 				continue;
 			}
-			if (modified(fd, s)) {
+			ok = modified(fd, s);
+			c_nix_fdclose(fd);
+			switch (ok) {
+			case 0:
 				ok = 0;
-			} else {
-				if (c_str_cmp(target, -1, s+67)) {
+				break;
+			case 2:
+				if (!rebuild(dep)) {
+					ok = 0;
+					break;
+				}
+			case 1:
+				if (c_str_cmp(target, -1, s + 67)) {
 					if (C_STR_SCMP(".do",
-					    s+((c_arr_bytes(&arr)))-3))
-						ok = depcheck(s+67);
+					    s + ((c_arr_bytes(&arr))) - 3)) {
+						if (!depcheck(s+67)) ok = 0;
+					}
 				}
 			}
-			c_nix_fdclose(fd);
 			break;
 		case '+': /* target must exist */
-			if (!exist(s+1)) ok = 0;
+			if (!exist(s + 1)) ok = 0;
 			break;
-		case '@':
-			ok = depcheck(s+1);
+		case '@': /* meta dep */
+			ok = depcheck(s + 1);
 			break;
 		case '!': /* always */
 			/* XXX: once per run */
