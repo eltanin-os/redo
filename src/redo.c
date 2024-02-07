@@ -1,7 +1,6 @@
 /* TODO:
  * 0. Once API is completely set, refactor heavily (if not rewrite)
  * 1. Fix redo(-if*) race condition on writing deps across different processes
- * 2. Always track the filesystem changes to ensure the database health
  */
 #include <tertium/cpu.h>
 #include <tertium/std.h>
@@ -143,14 +142,6 @@ fdopen2(char *s, uint opts)
 		c_err_die(1, "failed to open \"%s\"", s);
 	}
 	return fd;
-}
-
-static void
-fdstat(ctype_stat *p, ctype_fd fd)
-{
-	if (c_nix_fdstat(p, fd) < 0) {
-		c_err_die(1, "failed to obtain path info");
-	}
 }
 
 static void
@@ -892,8 +883,8 @@ static void
 walkdeps(void (*func)(char *, usize, char *), char *s)
 {
 	ctype_dir dir;
-	ctype_stat st;
 	ctype_dent *p;
+	ctype_stat st;
 	usize len;
 	char *args[2], *dep;
 
@@ -936,6 +927,42 @@ walkdeps(void (*func)(char *, usize, char *), char *s)
 		}
 	}
 	c_dir_close(&dir);
+}
+
+static void
+dbsync(void)
+{
+	ctype_dir dir;
+	ctype_dent *p;
+	ctype_arr arr;
+	usize len;
+	char *args[2];
+
+	c_mem_set(&arr, sizeof(arr), 0);
+	dynfmt(&arr, "%s", redo_rootdir);
+
+	args[0] = getdbpath();
+	args[1] = nil;
+	if (c_dir_open(&dir, args, 0, nil) < 0) {
+		c_err_die(1, "failed to open directory \"%s\"", *args);
+	}
+	len = c_str_len(*args, -1);
+	while ((p = c_dir_read(&dir))) {
+		dynfmt(&arr, "%.*s", p->len - len, p->path + len);
+		switch (p->info) {
+		case C_DIR_FSF:
+			/* strip ".dep" */
+			c_arr_trunc(&arr, c_arr_bytes(&arr) - 4, sizeof(uchar));
+			if (!exist(c_arr_data(&arr))) c_nix_unlink(p->path);
+		case C_DIR_FSD:
+			break;
+		case C_DIR_FSDP:
+			c_nix_rmdir(p->path);
+		}
+		c_arr_trunc(&arr, redo_rootdir_len, sizeof(uchar));
+	}
+	c_dir_close(&dir);
+	c_dyn_free(&arr);
 }
 
 /* usage routines */
@@ -1037,7 +1064,6 @@ redo(int argc, char **argv)
 		argc = 1;
 		argv = args;
 	}
-	if (redo_depfd == - 1) setenv(REDO_ROOTDIR, pwd);
 	return redo_ifchange(argc, argv);
 }
 
@@ -1053,7 +1079,12 @@ main(int argc, char **argv)
 	/* prepare environment */
 	redo_depfd = getnum(REDO_DEPFD);
 	if ((redo_depth = getnum(REDO_DEPTH)) < 0) redo_depth = 0;
-	if (!(redo_rootdir = c_std_getenv(REDO_ROOTDIR))) redo_rootdir = pwd;
+	/* main process? */
+	if (!(redo_rootdir = c_std_getenv(REDO_ROOTDIR))) {
+		setenv(REDO_ROOTDIR, pwd);
+		redo_rootdir = pwd;
+		dbsync();
+	}
 	redo_rootdir_len = c_str_len(redo_rootdir, -1);
 	/* catch flags */
 	if ((xflag = getnum(REDO_XFLAG)) < 0) xflag = 0;
