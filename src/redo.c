@@ -17,6 +17,7 @@
  argv += argmain->idx; \
 }
 
+#define TMPBASE ".tmpfile."
 #define TMPFILE ".tmpfile.XXXXXXXXX"
 
 #define REDO_XFLAG "_TERTIUM_REDO_XFLAG"
@@ -60,6 +61,15 @@ recdel(char **args)
 	}
 	c_dir_close(&dir);
 	return 0;
+}
+
+static ctype_status
+recdel1(char *s)
+{
+	char *args[2];
+	args[0] = s;
+	args[1] = nil;
+	return recdel(args);
 }
 
 static void
@@ -436,6 +446,7 @@ linkname(char *s, ctype_stat *p)
 			c_err_die(1, "failed to obtain path info \"%s\"", s);
 		}
 	}
+
 	if (!C_NIX_ISLNK(p->mode)) return nil;
 
 	if (c_nix_readlink(buf, sizeof(buf), s) < 0) {
@@ -495,6 +506,84 @@ hashfd(ctype_hst *h, char *s, ctype_stat *sp)
 		}
 	}
 	c_dir_close(&dir);
+}
+
+/* Thank the WOP (workaround oriented programming) APIs for the drama
+ * to replace a dir atomically:
+ * 1. symlink:
+ * problem = dir is not a dir anymore, need to track orphans
+ * pseudo =
+ * l=$(readlink cur)
+ * ln -s new tmp
+ * rename(tmp, cur)
+ * rm -Rf $l
+ * 2. mount black magic:
+ * problem = requires privileges
+ * pseudo =
+ * mount -o bind,rw cur tmp
+ * mount -o bind,ro new cur
+ * rm -Rf tmp/*
+ * cp -R new/. tmp
+ * umount cur tmp
+ * 3. renameat2:
+ * problem = not reliable nor portable
+ */
+static ctype_status
+replace(char *d, char *s)
+{
+	ctype_stat sta, stb;
+	ctype_status r;
+	char *l;
+	char sym[sizeof(TMPFILE)];
+	char tmp[sizeof(TMPFILE)];
+
+	if (c_nix_lstat(&sta, s) < 0) {
+		c_err_die(1, "failed to obtain path info \"%s\"", d);
+	}
+	r = 1;
+	if (C_NIX_ISDIR(sta.mode)) {
+		c_str_cpy(sym, sizeof(sym), TMPFILE);
+		c_nix_fdclose(c_nix_mktemp3(sym, sizeof(sym), C_NIX_OTMPANON));
+		if (c_nix_symlink(sym, s) < 0) {
+			c_err_die(1,
+			    "failed to create symlink from \"%s\" to \"%s\"",
+			    sym, s);
+		}
+		s = sym;
+		++r;
+	}
+	if (c_nix_lstat(&sta, d) < 0) {
+		if (errno == C_ERR_ENOENT) goto ret;
+		c_err_die(1, "failed to obtain path info \"%s\"", d);
+	}
+	if (C_NIX_ISDIR(sta.mode)) {
+		/* not atomic just the best that can be done */
+		c_str_cpy(tmp, sizeof(tmp), TMPFILE);
+		c_nix_fdclose(c_nix_mktemp3(tmp, sizeof(tmp), C_NIX_OTMPANON));
+		if (c_nix_rename(tmp, d) < 0) return -1;
+		if (c_nix_rename(d, s) < 0) {
+			c_nix_rename(d, tmp); /* try to undo */
+			return -1;
+		}
+		recdel1(tmp);
+		return r;
+	} else if (C_NIX_ISLNK(sta.mode)) {
+		if (c_nix_stat(&stb, d) < 0) {
+			if (errno == C_ERR_ENOENT) goto ret;
+			c_err_die(1, "failed to obtain path info \"%s\"", d);
+		}
+		if (C_NIX_ISDIR(stb.mode)) {
+			l = c_gen_basename(linkname(d, &sta));
+			if (!C_STR_CMP(TMPBASE, l)) {
+				if (c_nix_rename(d, s) < 0) return -1;
+				recdel1(l);
+				return r;
+			}
+		}
+	}
+ret:
+	if (c_nix_rename(d, s) < 0) return -1;
+	return r;
 }
 
 /* deps routines */
@@ -719,6 +808,7 @@ static int
 rundo(char *dofile, char *dir, char *target)
 {
 	ctype_arr arr;
+	ctype_status r;
 	char out[C_LIM_PATHMAX];
 	char **args;
 	/* redirection */
@@ -734,8 +824,10 @@ rundo(char *dofile, char *dir, char *target)
 	c_std_free(args);
 	/* target */
 	if (exist(out)) {
-		c_nix_rename(target, out);
-		return 1;
+		if ((r = replace(target, out)) < 0) {
+			c_err_die(1, "failed to replace %s", target);
+		}
+		return r;
 	}
 	return 0;
 }
@@ -746,6 +838,7 @@ ifchange(char *target)
 	ctype_stat st;
 	ctype_arr arr;
 	ctype_fd depfd;
+	ctype_status r;
 	usize len;
 	int depth;
 	char deptmp[C_LIM_PATHMAX];
@@ -792,7 +885,10 @@ ifchange(char *target)
 
 	dir = dirname(target);
 	file = c_gen_basename(target);
-	if (rundo(*s, dir, file)) fdfmt(depfd, "+%s\n", target);
+	if ((r = rundo(*s, dir, file))) {
+		/* if "dir"(sym) add a slash so it's treated as a dir */
+		fdfmt(depfd, "+%s%s\n", target, (r == 1) ? "" : "/");
+	}
 	depwrite(depfd, *s);
 	c_nix_rename(dep, deptmp);
 	for (; *s; ++s) c_std_free(*s);
