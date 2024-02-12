@@ -887,7 +887,8 @@ _whichdo(char *target)
 static ctype_status
 always(ctype_fd fd)
 {
-	return fdfmt(fd, "!\n");
+	fdfmt(fd, "!\n");
+	return 0;
 }
 
 static ctype_status
