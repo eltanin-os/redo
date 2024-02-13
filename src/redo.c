@@ -1022,6 +1022,7 @@ _sources_func(char *file, char *s, usize n, void *data)
 		s = dbgetpath(s, "dep");
 		if (exist(s)) sources(s, c_str_len(s, -1), sp->file);
 	}
+	return 0;
 }
 
 static void
