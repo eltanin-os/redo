@@ -776,6 +776,7 @@ modified(char *s)
 static ctype_status
 _depcheck_func(char *file, char *s, usize n, void *data)
 {
+	if (opts & FFLAG) return 1;
 	(void)data;
 	switch (*s) {
 	case '-':
