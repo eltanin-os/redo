@@ -298,7 +298,7 @@ exist(char *s)
 	ctype_stat st;
 	if (c_nix_lstat(&st, s) < 0) {
 		if (errno == C_ERR_ENOENT) return 0;
-		c_err_die(1, "failed to obtain path info \"%s\"", s);
+		c_err_die(1, "failed to obtain info \"%s\"", s);
 	}
 	return 1;
 }
@@ -473,7 +473,7 @@ linkname(char *s, ctype_stat *p)
 	if (!p) {
 		p = &st;
 		if (c_nix_lstat(&st, s) < 0) {
-			c_err_die(1, "failed to obtain path info \"%s\"", s);
+			c_err_die(1, "failed to obtain info \"%s\"", s);
 		}
 	}
 
@@ -552,21 +552,34 @@ static char *
 progname(char *dofile, int *toexec)
 {
 	static ctype_arr arr; /* "memory leak" */
-	ctype_stat st;
+	ctype_stat sta, stb;
 	ctype_ioq ioq;
 	ctype_fd fd;
-	int isexec;
 	char buf[C_IOQ_BSIZ];
 	char *s;
 
 	/* check executability */
+	if (c_nix_stat(&sta, dofile) < 0) {
+		c_err_die(1, "failed to obtain info \"%s\"", dofile);
+	}
+	if (sta.mode & C_NIX_IXUSR) return (*toexec = 0, dofile);
+	*toexec = 1;
+
+	/* init io queue and check race condition */
 	if ((fd = c_nix_fdopen2(dofile, C_NIX_OREAD)) < 0) {
+		if (errno == C_ERR_ENOENT) return progname(dofile, toexec);
 		c_err_die(1, "failed to open \"%s\"", dofile);
 	}
-	isexec = (c_nix_fdstat(&st, fd) == 0) && (st.mode & C_NIX_IXUSR);
+	if (c_nix_fdstat(&stb, fd) < 0) {
+		c_err_die(1, "failed to obtain fd info \"%s\"", dofile);
+	}
+	if (!(sta.dev == stb.dev && sta.ino == stb.ino)) {
+		c_nix_fdclose(fd);
+		return progname(dofile, toexec);
+	}
+	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
 
 	/* get first line */
-	c_ioq_init(&ioq, fd, buf, sizeof(buf), &c_nix_fdread);
 	c_arr_trunc(&arr, 0, sizeof(uchar));
 	switch (c_ioq_getln(&arr, &ioq)) {
 	case -1:
@@ -580,16 +593,10 @@ progname(char *dofile, int *toexec)
 	/* check for shellbang */
 	c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar)); /* linefeed */
 	s = c_arr_data(&arr);
-	if (!(s[0] == '#' && s[1] == '!')) goto shfallback;
-
-	if (isexec) return dofile;
-
-	*toexec = 1;
-	return s + 2; /* #! */
+	if (s[0] == '#' && s[1] == '!') return s + 2;
 shfallback:
 	c_arr_trunc(&arr, 0, sizeof(uchar));
 	dynfmt(&arr, "/bin/sh -e%s", (opts & XFLAG) ? "x" : "");
-	*toexec = 1;
 	return c_arr_data(&arr);
 }
 
@@ -598,7 +605,7 @@ getargs(char *dofile, char *target, char *out)
 {
 	int toexec;
 	char *base, *prog;
-	prog = progname(dofile, (toexec = 0, &toexec));
+	prog = progname(dofile, &toexec);
 	base = basefilename(dofile, target);
 	if (toexec) return arglist(prog, dofile, target, base, out);
 	return arglist(prog, target, base, out);
@@ -622,26 +629,24 @@ static ctype_status
 replace(char *d, char *s)
 {
 	ctype_stat sta, stb;
-	ctype_status ret;
 	char sym[sizeof(TMPFILE)];
 	char tmp[sizeof(TMPFILE)];
 	char *path;
 
 	if (c_nix_lstat(&sta, s) < 0) {
-		c_err_die(1, "failed to obtain path info \"%s\"", s);
+		c_err_die(1, "failed to obtain info \"%s\"", s);
 	}
-	if ((ret = C_NIX_ISDIR(sta.mode))) {
+	if (C_NIX_ISDIR(sta.mode)) {
 		c_str_cpy(sym, sizeof(sym), TMPFILE);
 		c_nix_fdclose(c_nix_mktemp3(sym, sizeof(sym), C_NIX_OTMPANON));
-		if (c_nix_symlink(sym, s) < 0) {
+		if (c_nix_symlink(sym, c_gen_basename(s)) < 0) {
 			c_err_die(1, "failed to create symlink \"%s\"", sym);
 		}
 		s = sym;
 	}
-	++ret;
 	if (c_nix_lstat(&sta, d) < 0) {
 		if (errno == C_ERR_ENOENT) goto end;
-		c_err_die(1, "failed to obtain path info \"%s\"", d);
+		c_err_die(1, "failed to obtain info \"%s\"", d);
 	}
 	if (C_NIX_ISDIR(sta.mode)) {
 		/* not atomic just the best that can be done */
@@ -653,24 +658,24 @@ replace(char *d, char *s)
 			return -1;
 		}
 		recdel1(tmp);
-		return ret;
+		return 0;
 	} else if (C_NIX_ISLNK(sta.mode)) {
 		if (c_nix_stat(&stb, d) < 0) {
 			if (errno == C_ERR_ENOENT) goto end;
-			c_err_die(1, "failed to obtain path info \"%s\"", d);
+			c_err_die(1, "failed to obtain info \"%s\"", d);
 		}
 		if (C_NIX_ISDIR(stb.mode)) {
 			path = c_gen_basename(linkname(d, &sta));
 			if (!C_STR_CMP(TMPBASE, path)) {
 				if (c_nix_rename(d, s) < 0) return -1;
 				recdel1(path);
-				return ret;
+				return 0;
 			}
 		}
 	}
 end:
 	if (c_nix_rename(d, s) < 0) return -1;
-	return ret;
+	return 0;
 }
 
 static int
@@ -683,8 +688,8 @@ rundo(char *dofile, char *dir, char *target)
 
 	/* redirection */
 	c_arr_init(&arr, out, sizeof(out));
-	arrfmt(&arr, "%s/" TMPFILE, dir);
-	c_nix_fdclose(mktemp(out, c_arr_bytes(&arr), C_NIX_OTMPANON)); /* $3 */
+	arrfmt(&arr, "%s/" TMPFILE, dir); /* $3 */
+	c_nix_fdclose(c_nix_mktemp3(out, c_arr_bytes(&arr), C_NIX_OTMPANON));
 
 	/* env */
 	setenv(REDO_TARGET, target);
@@ -698,9 +703,10 @@ rundo(char *dofile, char *dir, char *target)
 	/* target */
 	if (exist(out)) {
 		if ((r = replace(target, out)) < 0) {
+			c_nix_unlink(out);
 			c_err_die(1, "failed to replace %s", target);
 		}
-		return r;
+		return 1;
 	}
 	return 0;
 }
@@ -761,7 +767,7 @@ modified(char *s)
 
 	if (c_nix_lstat(&st, s + 67) < 0) {
 		if (errno == C_ERR_ENOENT) return 1;
-		c_err_die(1, "failed to obtain path info \"%s\"", s + 67);
+		c_err_die(1, "failed to obtain info \"%s\"", s + 67);
 	}
 
 	/* time stamp */
@@ -908,7 +914,6 @@ _ifchange(char *s)
 {
 	ctype_stat st;
 	ctype_fd depfd;
-	ctype_status ret;
 	usize len;
 	char *dep, *deptmp;
 	char **dofiles;
@@ -946,8 +951,8 @@ _ifchange(char *s)
 	len = depth << 1;
 	c_err_warnx("%*.*s %s", (int)len, (int)len, " ", pathshrink(s));
 
-	if ((ret = rundo(*dofiles, dirname(s), c_gen_basename(s)))) {
-		fdfmt(depfd, "+%s%s\n", pathshrink(s), (ret == 1) ? "" : "/");
+	if (rundo(*dofiles, dirname(s), c_gen_basename(s))) {
+		fdfmt(depfd, "+%s\n", pathshrink(s));
 	}
 	depwrite(depfd, *dofiles);
 	if (c_nix_rename(dep, deptmp) < 0) {
@@ -983,7 +988,7 @@ ifchange(char *s)
 	if (exist(s)) {
 		depwrite(parentfd, s);
 	} else {
-		fdfmt(parentfd, "@%s\n", s);
+		fdfmt(parentfd, "@%s\n", pathshrink(s));
 	}
 	return ret;
 }
