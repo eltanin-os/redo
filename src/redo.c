@@ -18,15 +18,17 @@ enum {
  argv += argmain->idx; \
 }
 
-#define TMPBASE ".tmpfile."
-#define TMPFILE ".tmpfile.XXXXXXXXX"
+#define TMPNAME ".eltaninos_redo_tmp"
+#define TMPEXT  "XXXXXXXXX"
+#define TMPBASE TMPNAME "."
+#define TMPFILE TMPBASE TMPEXT
 
-#define REDO_XFLAG "_TERTIUM_REDO_XFLAG"
-#define REDO_ROOTDIR "_TERTIUM_REDO_ROOTDIR"
-#define REDO_ROOTFD "_TERTIUM_REDO_ROOTFD"
-#define REDO_TARGET "_TERTIUM_REDO_TARGET"
-#define REDO_DEPFD "_TERTIUM_REDO_DEPFD"
-#define REDO_DEPTH "_TERTIUM_REDO_DEPTH"
+#define REDO_XFLAG "_ELTANINOS_REDO_XFLAG"
+#define REDO_ROOTDIR "_ELTANINOS_REDO_ROOTDIR"
+#define REDO_ROOTFD "_ELTANINOS_REDO_ROOTFD"
+#define REDO_TARGET "_ELTANINOS_REDO_TARGET"
+#define REDO_DEPFD "_ELTANINOS_REDO_DEPFD"
+#define REDO_DEPTH "_ELTANINOS_REDO_DEPTH"
 
 #define HDEC(x) ((x <= '9') ? x - '0' : (((uchar)x | 32) - 'a') + 10)
 
@@ -77,15 +79,6 @@ recdel(char **args)
 	return 0;
 }
 
-static ctype_status
-recdel1(char *s)
-{
-	char *args[2];
-	args[0] = s;
-	args[1] = nil;
-	return recdel(args);
-}
-
 static void
 cleantrash(void)
 {
@@ -111,15 +104,13 @@ nomem:
 	do { c_nix_unlink(p->p); } while ((p = p->next)->prev);
 free:
 	c_std_free(args);
-	while ((p = c_adt_lpop(&tmpfiles))) c_adt_lfree(p);
+	while ((p = c_adt_lpop(&tmpfiles))) c_adt_lfree(p, c_std_free_);
 }
 
 static void
 trackfile(char *s, usize n)
 {
-	ctype_node *p;
-	p = c_adt_lnew(s, n);
-	if (c_adt_lpush(&tmpfiles, p) < 0) c_err_diex(1, nil);
+	if (c_adt_lpush(&tmpfiles, c_adt_lnew(s, n)) < 0) c_err_diex(1, nil);
 }
 
 /* fail routines */
@@ -129,7 +120,7 @@ arglist_(char *prog, ...)
 	char **av;
 	va_list ap;
 	va_start(ap, prog);
-	if (!(av = c_exc_varglist(prog, ap))) c_err_diex(1, nil);
+	if (!(av = c_exc_vsplit(prog, ap))) c_err_diex(1, nil);
 	va_end(ap);
 	return av;
 }
@@ -217,24 +208,6 @@ setnum(char *k, int x)
 
 /* fmt routines */
 static ctype_status
-fdput(ctype_fmt *p, char *s, usize n)
-{
-	return c_nix_allrw(&c_nix_fdwrite, *(ctype_fd *)p->farg, s, n);
-}
-
-static ctype_status
-fdfmt(ctype_fd fd, char *fmt, ...)
-{
-	ctype_fmt f;
-	va_list ap;
-	c_fmt_init(&f, &fd, &fdput);
-	va_start(ap, fmt);
-	va_copy(f.args, ap);
-	va_end(ap);
-	return c_fmt_fmt(&f, fmt);
-}
-
-static ctype_status
 hex(ctype_fmt *p)
 {
 	int len, i;
@@ -274,7 +247,7 @@ basefilename(char *dofile, char *s)
 	} else {
 		nstrip = 1;
 	}
-	c_str_cpy(buf, sizeof(buf), c_gen_basename(s));
+	c_str_cpy(buf, sizeof(buf), s);
 	while (nstrip) {
 		tmp = c_str_rchr(buf, sizeof(buf), '.');
 		if (!tmp) break;
@@ -352,7 +325,7 @@ dbgetpath(char *s, char *ext)
 }
 
 static void
-linetoabs(ctype_arr *ap, char *s)
+lineabs(ctype_arr *ap, char *s)
 {
 	usize pos;
 
@@ -397,7 +370,7 @@ dbgetlines(char *s, ctype_status (*fn)(char *, char *, usize, void *), void *p)
 
 	while ((r = c_ioq_getln(&arr, &ioq)) > 0) {
 		c_arr_trunc(&arr, c_arr_bytes(&arr) - 1, sizeof(uchar));
-		linetoabs(&arr, c_arr_data(&arr));
+		lineabs(&arr, c_arr_data(&arr));
 		if (fn(s, c_arr_data(&arr), c_arr_bytes(&arr), p)) {
 			ret = 1;
 			goto end;
@@ -415,7 +388,7 @@ end:
 }
 
 static void
-dbsync(void)
+sync(void)
 {
 	ctype_dir dir;
 	ctype_dent *p;
@@ -431,23 +404,21 @@ dbsync(void)
 	while ((p = c_dir_read(&dir))) {
 		switch (p->info) {
 		case C_DIR_FSF:
-			if (!C_STR_SCMP(".dep",
-			    p->name + (p->nlen - 4))) {
-				s = absolute(p->path);
-				n = c_str_len(s, -1);
+			s = p->name + (p->nlen - 4);
+			if (!C_STR_SCMP(".dep", s)) {
+				n = c_str_len((s = absolute(p->path)), -1);
 				s[n - 4] = 0; /* strip .dep */
 				if (!exist(s)) c_nix_unlink(p->path);
-			} else if (!C_STR_SCMP(".src",
-			    p->name + (p->nlen - 4))) {
-				s = absolute(p->path);
-				n = c_str_len(s, -1);
+			} else if (!C_STR_SCMP(".src", s)) {
+				n = c_str_len((s = absolute(p->path)), -1);
 				c_str_cpy(s + (n - 4), 4, ".dep");
 				if (exist(s)) c_nix_unlink(p->path);
 			}
+			p->parent->num++;
 		case C_DIR_FSD:
 			break;
 		case C_DIR_FSDP:
-			c_nix_rmdir(p->path);
+			if (p->num) c_nix_rmdir(p->path);
 		}
 	}
 	c_dir_close(&dir);
@@ -465,21 +436,11 @@ hexcmp(char *p, usize n, char *s)
 }
 
 static char *
-linkname(char *s, ctype_stat *p)
+linkname(char *s)
 {
 	static char buf[C_LIM_PATHMAX];
-	ctype_stat st;
-
-	if (!p) {
-		p = &st;
-		if (c_nix_lstat(&st, s) < 0) {
-			c_err_die(1, "failed to obtain info \"%s\"", s);
-		}
-	}
-
-	if (!C_NIX_ISLNK(p->mode)) return nil;
-
 	if (c_nix_readlink(buf, sizeof(buf), s) < 0) {
+		if (errno == C_ERR_EINVAL) return nil;
 		c_err_die(1, "failed to read symlink \"%s\"", s);
 	}
 	return buf;
@@ -504,7 +465,7 @@ hashfd(ctype_hst *h, char *s, ctype_stat *sp)
 
 	/* avoid path strip below */
 	if (C_NIX_ISLNK(sp->mode)) {
-		s = linkname(s, sp);
+		s = linkname(s);
 		c_hsh_md5->update(h, s, c_str_len(s, -1));
 		return;
 	} else if (!C_NIX_ISDIR(sp->mode)) {
@@ -537,7 +498,7 @@ hashfd(ctype_hst *h, char *s, ctype_stat *sp)
 		switch (p->info) {
 		case C_DIR_FSSL:
 		case C_DIR_FSSLN:
-			s = linkname(p->path, p->stp);
+			s = linkname(p->path);
 			c_hsh_md5->update(h, s, c_str_len(s, -1));
 			break;
 		default:
@@ -657,7 +618,7 @@ replace(char *d, char *s)
 			c_nix_rename(d, tmp); /* try to undo */
 			return -1;
 		}
-		recdel1(tmp);
+		trackfile(tmp, c_str_len(tmp, -1));
 		return 0;
 	} else if (C_NIX_ISLNK(sta.mode)) {
 		if (c_nix_stat(&stb, d) < 0) {
@@ -665,10 +626,10 @@ replace(char *d, char *s)
 			c_err_die(1, "failed to obtain info \"%s\"", d);
 		}
 		if (C_NIX_ISDIR(stb.mode)) {
-			path = c_gen_basename(linkname(d, &sta));
+			path = c_gen_basename(linkname(d));
 			if (!C_STR_CMP(TMPBASE, path)) {
 				if (c_nix_rename(d, s) < 0) return -1;
-				recdel1(path);
+				trackfile(path, c_str_len(path, -1));
 				return 0;
 			}
 		}
@@ -679,19 +640,25 @@ end:
 }
 
 static int
-rundo(char *dofile, char *dir, char *target)
+rundo(char *dofile, char *target)
 {
 	ctype_arr arr;
 	ctype_status r;
 	char out[C_LIM_PATHMAX];
 	char **args;
 
+	/* dir */
+	char *dir = dirname(dofile);
+	c_exc_setenv("PWD", dir);
+	c_nix_chdir(dir);
+	target += c_str_len(dir, -1) + 1; /* matching(dofile, target) + "/" */
+
 	/* redirection */
 	c_arr_init(&arr, out, sizeof(out));
-	arrfmt(&arr, "%s/" TMPFILE, dir); /* $3 */
+	arrfmt(&arr, "%s/" TMPFILE, dirname(target)); /* $3 */
 	c_nix_fdclose(c_nix_mktemp3(out, c_arr_bytes(&arr), C_NIX_OTMPANON));
 
-	/* env */
+	/* redo env */
 	setenv(REDO_TARGET, target);
 	setnum(REDO_DEPTH, depth + 1);
 
@@ -727,10 +694,11 @@ _rebuild_func(char *file, char *s, usize n, void *data)
 		if (c_nix_lstat(&st, s + 67) < 0) return 1;
 		c_taia_fromtime(&now, &st.ctim);
 		c_taia_pack(buf, &now);
-		return fdfmt(r->fd, "%c%H%s\n", *s, sizeof(buf), buf, s + 33);
+		return c_nix_fdfmt(r->fd,
+		    "%c%H%s\n", *s, sizeof(buf), buf, s + 33);
 	}
 
-	fdfmt(r->fd, "%s\n", s);
+	c_nix_fdfmt(r->fd, "%s\n", s);
 	return 0;
 }
 
@@ -743,7 +711,7 @@ rebuild(char *s, char *target)
 	char *deptmp;
 
 	r.target = target;
-	deptmp = dbgetpath(".tmpfile", "XXXXXXXXX");
+	deptmp = dbgetpath(TMPNAME, TMPEXT);
 	len = c_str_len(deptmp, -1);
 	if (!(deptmp = c_str_dup(deptmp, len))) c_err_die(1, nil);
 	r.fd = mktemp(deptmp, len, 0);
@@ -842,7 +810,7 @@ depwrite(ctype_fd fd, char *dep)
 	hashfd(&h, dep, &st);
 	c_hsh_md5->end(&h, hash);
 	/* write */
-	fdfmt(fd, "=%H %H %s\n",
+	c_nix_fdfmt(fd, "=%H %H %s\n",
 	    sizeof(time), time, sizeof(hash), hash, pathshrink(dep));
 }
 
@@ -898,14 +866,14 @@ _whichdo(char *target)
 static ctype_status
 always(ctype_fd fd)
 {
-	fdfmt(fd, "!\n");
+	c_nix_fdfmt(fd, "!\n");
 	return 0;
 }
 
 static ctype_status
 ifcreate(char *s)
 {
-	fdfmt(parentfd, "-%s\n", pathshrink(s));
+	c_nix_fdfmt(parentfd, "-%s\n", pathshrink(s));
 	return exist(s);
 }
 
@@ -920,7 +888,7 @@ _ifchange(char *s)
 
 	if (!depcheck(s)) return 0;
 
-	deptmp = dbgetpath(".tmpfile", "XXXXXXXXX");
+	deptmp = dbgetpath(TMPNAME, TMPEXT);
 	len = c_str_len(deptmp, -1);
 	if (!(deptmp = c_str_dup(deptmp, len))) c_err_die(1, nil);
 	depfd = mktemp(deptmp, len, 0);
@@ -931,7 +899,7 @@ _ifchange(char *s)
 	dofiles = _whichdo(s);
 	for (; *dofiles; ++dofiles) {
 		if (exist(*dofiles)) break;
-		fdfmt(depfd, "-%s\n", pathshrink(*dofiles));
+		c_nix_fdfmt(depfd, "-%s\n", pathshrink(*dofiles));
 	}
 	if (!*dofiles) {
 		if (c_nix_lstat(&st, s)) {
@@ -951,14 +919,13 @@ _ifchange(char *s)
 	len = depth << 1;
 	c_err_warnx("%*.*s %s", (int)len, (int)len, " ", pathshrink(s));
 
-	if (rundo(*dofiles, dirname(s), c_gen_basename(s))) {
-		fdfmt(depfd, "+%s\n", pathshrink(s));
+	if (rundo(*dofiles, s)) {
+		c_nix_fdfmt(depfd, "+%s\n", pathshrink(s));
 	}
-	depwrite(depfd, *dofiles);
 	if (c_nix_rename(dep, deptmp) < 0) {
-		c_nix_unlink(deptmp);
 		c_err_die(1, "failed to update dep \"%s\"", dep);
 	}
+	depwrite(depfd, *dofiles);
 	for (; *dofiles; ++dofiles) c_std_free(*dofiles);
 end:
 	c_std_free(dep);
@@ -972,23 +939,14 @@ static ctype_status
 ifchange(char *s)
 {
 	ctype_status ret;
-	char *dir;
-
-	dir = dirname(s);
-	if (c_nix_mkpath(dir, 0755, 0755) < 0) {
-		c_err_die(1, "failed to generate path %s", dir);
-	}
-	c_exc_setenv("PWD", dir);
-	c_nix_chdir(dir);
 
 	ret = _ifchange(s);
-
 	if (opts & FFLAG) return ret;
 
 	if (exist(s)) {
 		depwrite(parentfd, s);
 	} else {
-		fdfmt(parentfd, "@%s\n", pathshrink(s));
+		c_nix_fdfmt(parentfd, "@%s\n", pathshrink(s));
 	}
 	return ret;
 }
@@ -1039,7 +997,6 @@ static void
 sources(char *dep, usize n, char *file)
 {
 	static struct sources src;
-
 	src.file = file;
 
 	dep[n - 4] = 0;
@@ -1179,10 +1136,10 @@ redo(int argc, char **argv)
 	argv += argmain->idx;
 
 	if (!argc) {
-		argc = 1;
-		argv = args;
 		args[0] = "all";
 		args[1] = nil;
+		argc = 1;
+		argv = args;
 	}
 	return mainfunc(argc, argv, &ifchange);
 }
@@ -1205,7 +1162,7 @@ main(int argc, char **argv)
 	if (!rootdir) {
 		rootdir = pwd;
 		setenv(REDO_ROOTDIR, rootdir);
-		dbsync();
+		sync();
 	}
 	rootdlen = c_str_len(rootdir, -1);
 
